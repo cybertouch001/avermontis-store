@@ -2,9 +2,9 @@
    - App shell + catalogue images are cached so the app opens instantly and can be browsed offline.
    - Prices, stock, cart checks, orders, accounts and admin always come from the network (never served stale).
    - Private pages (account, checkout, admin, invoices...) are never stored on the device. */
-var VERSION = 'avm-v6.0';
+var VERSION = 'avm-v7.0';
 var SHELL = VERSION + '-shell', PAGES = VERSION + '-pages', IMG = VERSION + '-img', DATA = VERSION + '-data';
-var PRECACHE = ['/app', '/assets/m/app.css?v=4.0.0', '/assets/m/app.js?v=4.0.0', '/assets/live.css?v=4.0.0', '/assets/live.js?v=4.0.0', '/img/campaign-tall.webp', '/img/ritual.webp', '/img/story.webp', '/', '/shop', '/cart', '/concerns', '/offline', '/assets/styles.css', '/assets/app.js', '/assets/pwa.js', '/products.js',
+var PRECACHE = ['/app', '/assets/m/app.css?v=5.0.0', '/assets/m/app.js?v=5.0.0', '/assets/live.css?v=5.0.0', '/assets/live.js?v=5.0.0', '/img/campaign-tall.webp', '/img/ritual.webp', '/img/story.webp', '/', '/shop', '/cart', '/concerns', '/offline', '/assets/styles.css', '/assets/app.js?v=5.0.0', '/assets/pwa.js', '/products.js',
   '/assets/fonts/cg-500.woff2', '/assets/fonts/cg-600.woff2', '/assets/fonts/cg-500-italic.woff2',
   '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/img/favicon.png', '/manifest.webmanifest'];
 var PRIVATE = /^\/(admin|account|login|signup|reset|forgot|checkout|order-success|track|invoice|media\/admin)(\/|$)/;

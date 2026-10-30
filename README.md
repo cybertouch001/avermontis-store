@@ -65,3 +65,16 @@ GitHub Pages can only host static pages. The admin panel, orders, login, chatbot
 ## Not in this repo
 
 No keystore, no passwords, no `.apk` / `.aab` files, no `node_modules`, no build output, and the one 14 MB AR file above (download it with `tools/fetch-vendor.sh`).
+
+## v5.0.0 (Oct 30 2026)
+- Owner sign-in from the normal customer sign-in (website and app): username `admin` + the existing owner password.
+  Same password hash as before; `/admin` still works. "admin" and look-alike names are reserved for customers.
+- Owner security: 5 wrong tries lock that device for 15 min, one generic error for every wrong sign-in, optional
+  4-6 digit PIN (off by default), idle sign-out (30 min default), "sign out all devices", owner sign-in history,
+  HttpOnly/Secure/SameSite cookies, server-side owner check on every admin API.
+- Design studio (admin): colours incl. dark/auto palette, self-hosted fonts (incl. Devanagari), size scale and weights,
+  presets + saved themes, home section order, grid columns, card/button/header style, app bottom bar, density,
+  animations, announcement bar, sanitised custom CSS, phone + desktop preview, draft/publish, undo, last 20 versions,
+  reset, export/import, contrast warnings. The Android app reads the published look at launch (no new APK needed).
+- Audit log of every owner change.
+- Tests: `cd store && node --test` (71); headless end-to-end: `node tools/e2e-server.mjs` + `python3 test/e2e_v5.py`.

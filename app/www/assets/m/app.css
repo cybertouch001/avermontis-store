@@ -443,3 +443,4 @@ html.lightapp .v4-banner::after{background:linear-gradient(180deg,transparent 25
 .v4-arview p{text-align:center;margin:10px 0 0}
 .v4-arstage>*{height:100%!important;width:100%}
 .v4-chat header .v4-av{color:#16130d;font:700 1.2rem/1 var(--serif)}
+.v4-bl-offer{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:6px 12px;border-radius:999px;border:1px solid var(--line2);background:transparent;color:var(--gold);font:600 .8rem/1 var(--sans)}.v4-bl-offer svg{width:15px;height:15px}

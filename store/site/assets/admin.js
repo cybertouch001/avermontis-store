@@ -93,11 +93,11 @@ function loginView(root, setupOpen){
   var form = $('#admin-login');
   wireForm(form, {password: function(v){ return v ? '' : 'Enter the owner password.'; }},
     function(){ return api('POST', '/api/admin/login', {password: form.password.value}); },
-    function(){ dashboard(root); });
+    function(r){ if (r && r.step === 'pin') return pinStep(root, r.challenge, function(){ dashboard(root); }); dashboard(root); });
 }
 
 /* ---------- dashboard shell ---------- */
-var TABS = [['overview','Overview'],['orders','Orders'],['products','Products'],['customize','Customize'],['assistant','Assistant'],['bargains','Bargains'],['ar','AR'],['notify','Notify'],['coupons','Coupons'],['reviews','Reviews'],['customers','Customers'],['messages','Messages'],['subscribers','Subscribers'],['logins','Login history'],['backup','Backup'],['settings','Settings']];
+var TABS = [['overview','Overview'],['design','Design studio'],['orders','Orders'],['products','Products'],['customize','Store info & banners'],['assistant','Assistant'],['bargains','Bargains'],['ar','AR'],['notify','Notify'],['coupons','Coupons'],['reviews','Reviews'],['customers','Customers'],['messages','Messages'],['subscribers','Subscribers'],['logins','Login history'],['security','Security'],['audit','Audit log'],['backup','Backup'],['settings','Settings']];
 var LABEL = {'new':'New', confirmed:'Confirmed', shipped:'Shipped', delivered:'Delivered', cancelled:'Cancelled'};
 var EVENT = {signup: 'Sign-up', login: 'Sign-in', admin_login: 'Owner sign-in', admin_setup: 'Owner setup'};
 var counts = {};
@@ -115,7 +115,7 @@ function go(tab){
   $$('.adm-tabs button').forEach(function(b){ var on = b.getAttribute('data-tab') === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); if (on && b.scrollIntoView) b.scrollIntoView({block:'nearest', inline:'nearest'}); });
   var p = $('#panel'); p.innerHTML = '<p class="muted"><span class="spinner"></span> Loading\u2026</p>';
   loadCounts();
-  ({overview: overviewTab, orders: ordersTab, products: productsTab, customize: customizeTab, assistant: assistantTab, bargains: bargainsTab, ar: arTab, notify: notifyTab, coupons: couponsTab, reviews: reviewsTab, customers: customersTab, messages: messagesTab, subscribers: subscribersTab, logins: loginsTab, backup: backupTab, settings: settingsTab})[tab](p);
+  ({overview: overviewTab, design: designTab, security: securityTab, audit: auditTab, orders: ordersTab, products: productsTab, customize: customizeTab, assistant: assistantTab, bargains: bargainsTab, ar: arTab, notify: notifyTab, coupons: couponsTab, reviews: reviewsTab, customers: customersTab, messages: messagesTab, subscribers: subscribersTab, logins: loginsTab, backup: backupTab, settings: settingsTab})[tab](p);
 }
 function fail(p, retry){ return function(err){ p.innerHTML = errorBox(err, true); var b = $('[data-retry]', p); if (b) b.addEventListener('click', function(){ retry(p); }); }; }
 function badge(tab, n){ var el = $('[data-n="' + tab + '"]'); if (el) { el.textContent = n; el.classList.toggle('hidden', !n); } }
@@ -444,11 +444,12 @@ var ICON_LABEL = {avr: 'AVR \u2014 green on white (new)', avr_gold: 'AVR \u2014 
 function customizeTab(p){
   loadUi().then(function(b){
     var u = b.ui, t = u.theme;
-    p.innerHTML = '<div class="v4-head"><div><h2 style="margin:0">Customize</h2><p class="muted small" style="margin:4px 0 0">Changes go live on the website and in the app (next time it opens) \u2014 no new app download needed.</p></div></div>' +
-      '<div class="v4-sub" role="tablist">' + [['look', 'Colours & fonts'], ['home', 'Home layout'], ['brand', 'Logo & name'], ['hero', 'Top banner & offers'], ['location', 'Location & hours'], ['delivery', 'Delivery areas'], ['contact', 'Contact & social'], ['icon', 'App icon']].map(function(x, i){ return '<button type="button" data-st="' + x[0] + '"' + (i ? '' : ' class="on"') + '>' + x[1] + '</button>'; }).join('') + '</div><div id="cz"></div>';
+    p.innerHTML = '<div class="v4-head"><div><h2 style="margin:0">Store info &amp; banners</h2><p class="muted small" style="margin:4px 0 0">Logo, banners, location, delivery, contact and app icon. Colours, fonts and layout are in <a href="#design" onclick="return false" data-goto-design>Design studio</a>.</p></div></div>' +
+      '<div class="v4-sub" role="tablist">' + [['brand', 'Logo & name'], ['hero', 'Top banner & offers'], ['location', 'Location & hours'], ['delivery', 'Delivery areas'], ['contact', 'Contact & social'], ['icon', 'App icon']].map(function(x, i){ return '<button type="button" data-st="' + x[0] + '"' + (i ? '' : ' class="on"') + '>' + x[1] + '</button>'; }).join('') + '</div><div id="cz"></div>';
     var go4 = function(k){ $$('.v4-sub button', p).forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-st') === k); }); ({look: czLook, home: czHome, brand: czBrand, hero: czHero, location: czLocation, delivery: czDelivery, contact: czContact, icon: czIcon})[k]($('#cz', p)); };
     $$('.v4-sub button', p).forEach(function(x){ x.addEventListener('click', function(){ go4(x.getAttribute('data-st')); }); });
-    go4('look');
+    var gd = $('[data-goto-design]', p); if (gd) gd.addEventListener('click', function(){ go('design'); });
+    go4('brand');
   }).catch(fail(p, customizeTab));
 }
 function previewFrame(path){ return '<div class="v4-preview"><div class="v4-pv-bar"><span>Live preview</span><span class="muted small">' + esc(path) + '</span></div><iframe id="pv" title="Live preview" src="' + path + (path.indexOf('?') < 0 ? '?' : '&') + 'avm_preview=1" loading="lazy"></iframe></div>'; }
@@ -660,6 +661,222 @@ function insightsBlock(p){
   }).catch(function(){});
 }
 
+
+/* =================================================================================================
+   v5: Design studio (every colour, dark mode, fonts incl. Hindi, presets + saved themes, layout, cards,
+   buttons, header, app bottom bar, announcement, custom CSS, phone + desktop preview, draft -> publish,
+   version history, undo, reset, export/import), Security (PIN, auto sign-out, sessions, sign-in history),
+   Audit log. Owner sign-in from the normal login page (username "admin") and from the app (one-time handoff).
+   ================================================================================================= */
+var APP_MODE = (function(){ try { if (/[?&]app=1/.test(location.search)) sessionStorage.setItem('avm_admin_app', '1'); return sessionStorage.getItem('avm_admin_app') === '1'; } catch(e){ return /[?&]app=1/.test(location.search); } })();
+function appBackButton(){
+  if (!APP_MODE || $('#back-to-app')) return;
+  var hdr = $('.site-header .nav'); if (!hdr) return;
+  var a = document.createElement('a'); a.id = 'back-to-app'; a.className = 'btn ghost small-btn'; a.href = 'https://localhost/#me'; a.textContent = '\u2190 Back to app';
+  hdr.insertBefore(a, hdr.firstChild);
+  // Android back button inside the app: go back to the app's own screens
+  try { var C = window.Capacitor; if (C && C.Plugins && C.Plugins.App && C.Plugins.App.addListener) C.Plugins.App.addListener('backButton', function(){ location.href = 'https://localhost/#me'; }); } catch(e){}
+}
+function pinStep(root, challenge, done){
+  root.innerHTML = '<form class="auth-card" id="pin-form" novalidate><span class="eyebrow">Owner sign in</span><h1>Enter your PIN</h1><p class="muted small">Second step: the 4\u20136 digit owner PIN you set in Security.</p>' +
+    '<div class="field"><label for="pin">Owner PIN</label><input id="pin" name="pin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" required><div class="err" id="err-pin" aria-live="polite"></div></div>' +
+    '<div class="form-alert hidden" role="alert"></div><button class="btn block" type="submit">Continue</button></form>';
+  var f = $('#pin-form', root); f.pin.focus();
+  wireForm(f, {pin: function(v){ return /^\d{4,6}$/.test(v) ? '' : 'Enter 4 to 6 digits.'; }}, function(){ return api('POST', '/api/auth/admin-pin', {challenge: challenge, pin: f.pin.value}); }, done);
+}
+function handoffPage(root){
+  var code = location.hash.slice(1); history.replaceState(null, '', '/admin/handoff');
+  if (!code) { root.innerHTML = '<div class="auth-card"><h1>Sign-in link missing</h1><p class="muted">Open the owner area again from the app.</p><a class="btn block" href="/admin">Owner sign in</a></div>'; return; }
+  api('POST', '/api/admin/handoff', {code: code}).then(function(){ try { sessionStorage.setItem('avm_admin_app', '1'); } catch(e){} location.replace('/admin?app=1'); },
+    function(err){ root.innerHTML = '<div class="auth-card"><span class="eyebrow">Owner sign in</span><h1>Link expired</h1><p class="muted">' + esc(err.message) + '</p><a class="btn block" href="https://localhost/#me">Back to the app</a></div>'; });
+}
+var D5 = null, DS = null;     // D5 = design being edited, DS = server state
+var COLOR_LABEL = {primary: 'Brand colour', accent: 'Accent (gold / highlights)', background: 'Background', text: 'Text', secondary: 'Secondary', surface: 'Cards / boxes', button_bg: 'Buttons', button_text: 'Button text', link: 'Links',
+  header_bg: 'Header', header_text: 'Header text', footer_bg: 'Footer / app bottom bar', footer_text: 'Footer text', success: 'Success (green)', error: 'Error (red)', dark_background: 'Dark mode background', dark_surface: 'Dark mode cards', dark_text: 'Dark mode text', dark_accent: 'Dark mode accent'};
+var NAV_LABEL = {home: 'Home', routine: 'Routine', diary: 'Diary', shop: 'Shop', me: 'Me'};
+var APP_SEC_LABEL = {banners: 'Offer banners', today: 'Today card', picks: 'Picks for you', ar: 'AR & 3D', order: 'Last order', explore: 'Explore', ingredient: 'Ingredient of the day'};
+function clone(x){ return JSON.parse(JSON.stringify(x)); }
+function hexOk(v){ return /^#[0-9A-Fa-f]{6}$/.test(v || ''); }
+function lum(h){ var c = [1,3,5].map(function(i){ var v = parseInt(h.substr(i,2),16)/255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); }); return 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2]; }
+function colorField(k, val, optional){
+  var v = val || '', auto = optional && !v, shown = hexOk(v) ? v : '#888888';
+  return '<div class="v5-color' + (auto ? ' is-auto' : '') + '" data-ck="' + k + '"><input type="color" value="' + shown + '" aria-label="' + esc(COLOR_LABEL[k]) + '"><div class="v5-cl"><b>' + esc(COLOR_LABEL[k]) + '</b>' +
+    '<input type="text" class="v5-hex" value="' + esc(auto ? '' : v) + '" placeholder="' + (optional ? 'Auto' : '#RRGGBB') + '" maxlength="7" spellcheck="false"></div>' + (optional ? '<button type="button" class="v5-auto" title="Use automatic colour">Auto</button>' : '') + '</div>';
+}
+function seg(name, val, opts){ return '<div class="v5-seg" data-seg="' + name + '">' + opts.map(function(o){ return '<button type="button" data-v="' + esc(String(o[0])) + '"' + (String(o[0]) === String(val) ? ' class="on"' : '') + '>' + esc(o[1]) + '</button>'; }).join('') + '</div>'; }
+function v5card(title, html, note){ return '<section class="v4-card v5-card"><h3>' + title + '</h3>' + (note ? '<p class="note">' + note + '</p>' : '') + html + '</section>'; }
+function designTab(p){
+  api('GET', '/api/admin/design').then(function(s){ DS = s; D5 = clone(s.draft ? {theme: s.draft.theme, layout: s.draft.layout, style: s.draft.style} : s.live); drawDesign(p); }).catch(fail(p, designTab));
+}
+function drawDesign(p){
+  var hasDraft = !!DS.draft;
+  p.innerHTML = '<div class="v4-head v5-head"><div><h2 style="margin:0">Design studio</h2><p class="muted small" style="margin:4px 0 0">Colours, fonts, themes, layout \u2014 for the website <b>and</b> the app. Edit, check the preview, then <b>Publish</b>. No new app download needed.</p></div>' +
+    '<div class="v5-status" id="v5-status">' + (hasDraft ? '<span class="pill warn">Draft saved \u2014 not live yet</span>' : '<span class="pill ok">Showing the live design</span>') + '</div></div>' +
+    '<div class="v5-bar"><button class="btn small-btn" type="button" id="v5-publish">\uD83D\uDE80 Publish</button><button class="btn ghost small-btn" type="button" id="v5-save">Save draft</button>' +
+    (hasDraft ? '<button class="btn ghost small-btn" type="button" id="v5-discard">Discard draft</button>' : '') +
+    '<button class="btn ghost small-btn" type="button" id="v5-undo" title="Go back to the design before the last publish">\u21B6 Undo last publish</button><button class="btn ghost small-btn" type="button" id="v5-reset">Reset to default</button>' +
+    '<button class="btn ghost small-btn" type="button" id="v5-export">Export</button><label class="btn ghost small-btn v5-file">Import<input type="file" accept="application/json,.json" id="v5-import" hidden></label></div>' +
+    '<div id="v5-warn" class="v5-warn" aria-live="polite"></div>' +
+    '<div class="v5-split"><div class="v5-left"><div class="v4-sub" role="tablist">' + [['presets', 'Themes'], ['colours', 'Colours'], ['fonts', 'Fonts'], ['layout', 'Layout'], ['extras', 'UI extras'], ['advanced', 'Custom CSS'], ['history', 'History']].map(function(x, i){ return '<button type="button" data-v5="' + x[0] + '"' + (i ? '' : ' class="on"') + '>' + x[1] + '</button>'; }).join('') + '</div><div id="v5-pane"></div></div>' +
+    '<div class="v5-right"><div class="v5-pv-bar">' + seg('pv', 'both', [['both', 'Phone + desktop'], ['phone', 'Phone'], ['desktop', 'Desktop']]) + '<span class="muted small">Preview (only you see it until you publish)</span></div>' +
+    '<div class="v5-pv both" id="v5-pv"><div class="v5-phone"><div class="v5-phone-in"><iframe id="pv-app" title="App preview" src="/app?avm_preview=1"></iframe></div><span class="muted small">App</span></div>' +
+    '<div class="v5-desk"><div class="v5-desk-in"><iframe id="pv-site" title="Website preview" src="/?avm_preview=1"></iframe></div><span class="muted small">Website</span></div></div></div></div>';
+  $$('.v4-sub button', p).forEach(function(b){ b.addEventListener('click', function(){ $$('.v4-sub button', p).forEach(function(x){ x.classList.toggle('on', x === b); }); pane(b.getAttribute('data-v5')); }); });
+  $('[data-seg="pv"]', p).addEventListener('click', function(e){ var b = e.target.closest('button'); if (!b) return; $$('button', this).forEach(function(x){ x.classList.toggle('on', x === b); }); $('#v5-pv').className = 'v5-pv ' + b.getAttribute('data-v'); });
+  $('#v5-publish').addEventListener('click', function(){
+    if (!confirm('Publish this design? It goes live on the website now and in the app the next time it opens or refreshes.')) return;
+    var b = this; busy(b, true); api('POST', '/api/admin/design/publish', {design: D5}).then(function(s){ DS = s; D5 = clone(s.live); toast('Published \u2014 live on the website and app'); drawDesign(p); }).catch(function(err){ busy(b, false); showErr(err); });
+  });
+  $('#v5-save').addEventListener('click', function(){ var b = this; busy(b, true); api('PUT', '/api/admin/design/draft', D5).then(function(s){ DS = s; toast('Draft saved (not live yet)'); drawDesign(p); }).catch(function(err){ busy(b, false); showErr(err); }); });
+  if ($('#v5-discard')) $('#v5-discard').addEventListener('click', function(){ if (!confirm('Throw away the draft and go back to the live design?')) return; api('DELETE', '/api/admin/design/draft').then(function(s){ DS = s; D5 = clone(s.live); toast('Draft discarded'); drawDesign(p); }).catch(showErr); });
+  $('#v5-undo').addEventListener('click', function(){ if (!confirm('Undo the last publish and go back to the design before it?')) return; api('POST', '/api/admin/design/undo', {}).then(function(s){ DS = s; D5 = clone(s.live); toast('Undone \u2014 previous design is live again'); drawDesign(p); }).catch(showErr); });
+  $('#v5-reset').addEventListener('click', function(){ if (!confirm('Reset colours, fonts and layout to the original AVERMONTIS design? (You can undo this from History.)')) return; api('POST', '/api/admin/design/reset', {}).then(function(s){ DS = s; D5 = clone(s.live); toast('Original design restored'); drawDesign(p); }).catch(showErr); });
+  $('#v5-export').addEventListener('click', function(){ location.href = '/api/admin/design/export'; });
+  $('#v5-import').addEventListener('change', function(){ var f = this.files && this.files[0]; if (!f) return; var rd = new FileReader();
+    rd.onload = function(){ var data; try { data = JSON.parse(rd.result); } catch(e){ return toast('That file is not a theme file.'); }
+      api('POST', '/api/admin/design/import', {data: data}).then(function(s){ DS = s; D5 = clone({theme: s.draft.theme, layout: s.draft.layout, style: s.draft.style}); toast('Theme imported as a draft \u2014 check the preview, then Publish'); drawDesign(p); }).catch(showErr); };
+    rd.readAsText(f); });
+  window.removeEventListener('message', v5Ready); window.addEventListener('message', v5Ready);
+  pane('presets'); v5Preview();
+}
+function showErr(err){ var w = $('#v5-warn'); var f = err.fields ? Object.keys(err.fields).map(function(k){ return err.fields[k]; }) : []; if (w) w.innerHTML = '<div class="alert error">' + esc(err.message) + (f.length > 1 ? '<br>' + f.map(esc).join('<br>') : '') + '</div>'; toast(err.message); }
+function v5Ready(e){ if (e.origin === location.origin && e.data && e.data.type === 'avm-preview-ready' && $('#v5-pv')) v5Send(); }
+var v5Timer, v5Last = null;
+function v5Preview(){ clearTimeout(v5Timer); v5Timer = setTimeout(function(){
+  api('POST', '/api/admin/design/preview', D5).then(function(r){ v5Last = r; v5Send(); v5Warn(r); }).catch(function(){}); }, 220); }
+function v5Send(){
+  if (!v5Last) return; var s = $('#pv-site'), a = $('#pv-app');
+  try { if (s && s.contentWindow) s.contentWindow.postMessage({type: 'avm-css', css: v5Last.css, announce: D5.style.announce_text || null, header: D5.style.header_layout}, location.origin); } catch(e){}
+  try { if (a && a.contentWindow) a.contentWindow.postMessage({type: 'avm-app-css', css: v5Last.app_css, style: D5.style}, location.origin); } catch(e){}
+}
+function v5Warn(r){
+  var w = $('#v5-warn'); if (!w) return;
+  var f = r.fields ? Object.keys(r.fields) : [];
+  w.innerHTML = (f.length ? '<div class="alert error"><b>Fix before publishing:</b> ' + f.map(function(k){ return esc(r.fields[k]); }).join(' \u00B7 ') + '</div>' : '') +
+    (r.warnings && r.warnings.length ? '<div class="alert v5-contrast">\u26A0\uFE0F <b>Readability:</b> ' + r.warnings.map(function(x){ return esc(x.message); }).join(' \u00B7 ') + '</div>' : '');
+}
+function changed(){ var st = $('#v5-status'); if (st) st.innerHTML = '<span class="pill warn">Unsaved changes \u2014 Save draft or Publish</span>'; v5Preview(); }
+function pane(k){
+  var el = $('#v5-pane'), T = D5.theme, S = D5.style, L = D5.layout;
+  if (k === 'presets') {
+    el.innerHTML = v5card('Ready-made themes', '<div class="v5-presets">' + Object.keys(DS.presets).map(function(id){ var x = DS.presets[id];
+      return '<button type="button" class="v5-preset' + (T.preset === id ? ' on' : '') + '" data-preset="' + id + '"><span class="v5-sw" style="background:' + x.background + '"><i style="background:' + x.primary + '"></i><i style="background:' + x.accent + '"></i><i style="background:' + x.text + '"></i></span><b>' + esc(x.label) + '</b></button>'; }).join('') + '</div>', 'Tap one to try it in the preview. Nothing changes for customers until you Publish.') +
+      v5card('My saved themes', (DS.themes.length ? '<div class="v5-presets">' + DS.themes.map(function(x){ return '<div class="v5-preset mine"><button type="button" data-mine="' + x.id + '"><span class="v5-sw" style="background:' + x.theme.background + '"><i style="background:' + x.theme.primary + '"></i><i style="background:' + x.theme.accent + '"></i><i style="background:' + x.theme.text + '"></i></span><b>' + esc(x.name) + '</b></button><button type="button" class="v5-del" data-del-theme="' + x.id + '" aria-label="Delete ' + esc(x.name) + '">\u00D7</button></div>'; }).join('') + '</div>' : '<p class="muted small">None yet.</p>') +
+      '<div class="v5-row"><input type="text" id="v5-tname" placeholder="Name, e.g. Diwali" maxlength="40"><button type="button" class="btn ghost small-btn" id="v5-tsave">Save current as theme</button></div>', 'Save the colours, fonts and style you have now under a name, and switch back any time.');
+    $$('[data-preset]', el).forEach(function(b){ b.addEventListener('click', function(){ var id = b.getAttribute('data-preset'), x = DS.presets[id];
+      Object.keys(x).forEach(function(k2){ if (k2 !== 'label') T[k2] = x[k2]; }); T.preset = id;
+      ['secondary','surface','button_bg','button_text','link','header_bg','header_text','footer_bg','footer_text','success','error','dark_background','dark_surface','dark_text','dark_accent'].forEach(function(c){ T[c] = ''; });
+      $$('[data-preset]', el).forEach(function(z){ z.classList.toggle('on', z === b); }); changed(); }); });
+    $$('[data-mine]', el).forEach(function(b){ b.addEventListener('click', function(){ var x = DS.themes.filter(function(t){ return t.id === b.getAttribute('data-mine'); })[0]; if (!x) return; D5.theme = clone(x.theme); D5.style = clone(x.style); changed(); toast('\u201C' + x.name + '\u201D loaded \u2014 Publish to make it live'); }); });
+    $$('[data-del-theme]', el).forEach(function(b){ b.addEventListener('click', function(){ if (!confirm('Delete this saved theme?')) return; api('DELETE', '/api/admin/design/themes/' + b.getAttribute('data-del-theme')).then(function(s){ DS.themes = s.themes; pane('presets'); }).catch(showErr); }); });
+    $('#v5-tsave', el).addEventListener('click', function(){ var n = $('#v5-tname', el).value.trim(); if (n.length < 2) return toast('Type a name first'); api('POST', '/api/admin/design/themes', {name: n, theme: T, style: S}).then(function(s){ DS.themes = s.themes; toast('Saved as \u201C' + n + '\u201D'); pane('presets'); }).catch(showErr); });
+  } else if (k === 'colours') {
+    el.innerHTML = v5card('Main colours', '<div class="v5-colors">' + ['primary', 'accent', 'background', 'text'].map(function(c){ return colorField(c, T[c], false); }).join('') + '</div>', 'Everything else is worked out from these four unless you set it below.') +
+      v5card('More colours', '<div class="v5-colors">' + ['secondary', 'surface', 'button_bg', 'button_text', 'link', 'header_bg', 'header_text', 'footer_bg', 'footer_text', 'success', 'error'].map(function(c){ return colorField(c, T[c], true); }).join('') + '</div>', '\u201CAuto\u201D = matched to your main colours.') +
+      v5card('Dark mode', '<div class="v5-lbl">Website</div>' + seg('site_mode', T.site_mode, [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto (follows phone)']]) + '<div class="v5-lbl">App</div>' + seg('app_mode', T.app_mode, [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Auto (follows phone)']]) +
+        '<div class="v5-colors" style="margin-top:12px">' + ['dark_background', 'dark_surface', 'dark_text', 'dark_accent'].map(function(c){ return colorField(c, T[c], true); }).join('') + '</div>', 'Auto switches between light and dark with the customer\u2019s phone setting. The dark colours are used in dark mode.');
+    wireColours(el); wireSegs(el, T);
+  } else if (k === 'fonts') {
+    var opt = function(list){ return list.map(function(f){ return [f, (DS.font_labels[f] || f)]; }); };
+    el.innerHTML = v5card('Fonts', '<div class="row2">' + sel('heading_font', 'Headings', T.heading_font, opt(DS.fonts.heading)) + sel('body_font', 'Body text', T.body_font, opt(DS.fonts.body)) + '</div>' +
+      '<p class="note">Fonts marked Hindi show Devanagari (\u0939\u093F\u0902\u0926\u0940) text properly. All fonts are stored on your own site, so pages stay fast.</p>' +
+      '<div class="field"><label for="font_scale">Text size: <b id="fs-v">' + (T.font_scale || 100) + '%</b></label><input type="range" id="font_scale" min="85" max="130" step="5" value="' + (T.font_scale || 100) + '"></div>' +
+      '<div class="row2">' + sel('heading_weight', 'Heading weight', T.heading_weight, [['', 'Default'], [400, 'Regular'], [500, 'Medium'], [600, 'Semi-bold'], [700, 'Bold']]) + sel('body_weight', 'Body weight', T.body_weight, [['', 'Default'], [300, 'Light'], [400, 'Regular'], [500, 'Medium']]) + '</div>');
+    ['heading_font', 'body_font', 'heading_weight', 'body_weight'].forEach(function(n){ $('#' + n, el).addEventListener('change', function(){ T[n] = /weight/.test(n) ? (this.value ? Number(this.value) : '') : this.value; if (n.indexOf('font') > 0) T.preset = 'custom'; changed(); }); });
+    $('#font_scale', el).addEventListener('input', function(){ T.font_scale = Number(this.value); $('#fs-v', el).textContent = this.value + '%'; changed(); });
+  } else if (k === 'layout') {
+    var navList = S.bottom_nav.concat(DS.bottom_nav_items.filter(function(x){ return S.bottom_nav.indexOf(x) < 0; }));
+    el.innerHTML = v5card('Website home page sections', orderList('o-web', L.home_web), 'Switch sections on/off and move them up or down.') +
+      v5card('App home screen sections', '<ol class="v4-order" id="o-app">' + L.home_app.map(function(x){ return '<li data-id="' + x.id + '"><label class="v4-switch small"><input type="checkbox"' + (x.on ? ' checked' : '') + '><span></span>' + esc(APP_SEC_LABEL[x.id] || x.id) + '</label><span class="v4-mv"><button type="button" data-up aria-label="Move up">\u2191</button><button type="button" data-down aria-label="Move down">\u2193</button></span></li>'; }).join('') + '</ol>') +
+      v5card('App bottom bar', '<ol class="v4-order" id="o-nav">' + navList.map(function(id){ var lock = id === 'home' || id === 'me'; return '<li data-id="' + id + '"><label class="v4-switch small"><input type="checkbox"' + (S.bottom_nav.indexOf(id) >= 0 ? ' checked' : '') + (lock ? ' disabled' : '') + '><span></span>' + NAV_LABEL[id] + (lock ? ' <em class="muted">(always on)</em>' : '') + '</label><span class="v4-mv"><button type="button" data-up aria-label="Move up">\u2191</button><button type="button" data-down aria-label="Move down">\u2193</button></span></li>'; }).join('') + '</ol>', 'Order and items of the tabs at the bottom of the app.') +
+      v5card('Product grid', '<div class="v5-lbl">Website \u2014 phone</div>' + seg('grid_mobile', S.grid_mobile, [[1, '1 column'], [2, '2'], [3, '3']]) + '<div class="v5-lbl">Website \u2014 computer</div>' + seg('grid_desktop', S.grid_desktop, [[2, '2 columns'], [3, '3'], [4, '4'], [5, '5']]) + '<div class="v5-lbl">App</div>' + seg('app_grid', S.app_grid, [[1, '1 column'], [2, '2'], [3, '3']])) +
+      v5card('Cards, buttons, header', '<div class="field"><label><input type="checkbox" id="cr-auto"' + (S.card_radius === null ? ' checked' : '') + '> Card corners: automatic</label><input type="range" id="card_radius" min="0" max="32" value="' + (S.card_radius === null ? 12 : S.card_radius) + '"' + (S.card_radius === null ? ' disabled' : '') + '> <b id="cr-v">' + (S.card_radius === null ? 'auto' : S.card_radius + 'px') + '</b></div>' +
+        '<div class="v5-lbl">Card shadow</div>' + seg('card_shadow', S.card_shadow, [['none', 'None'], ['soft', 'Soft'], ['strong', 'Strong']]) + '<div class="v5-lbl">Card border</div>' + seg('card_border', String(S.card_border), [['true', 'Show'], ['false', 'Hide']]) +
+        '<div class="v5-lbl">Button shape</div>' + seg('button_shape', S.button_shape, [['default', 'Original'], ['square', 'Square'], ['rounded', 'Rounded'], ['pill', 'Pill']]) + '<div class="v5-lbl">Logo in the header</div>' + seg('header_layout', S.header_layout, [['left', 'Left'], ['center', 'Centre']])) +
+      v5card('Banner & hero', '<p class="muted small">Big top banner image, title, button text and offer banners are edited in <a href="#customize" data-goto5="customize">Customize \u2192 Top banner &amp; offers</a>.</p>');
+    wireOrder($('#o-web', el), function(){ L.home_web = readOrder($('#o-web', el)); changed(); });
+    wireOrder($('#o-app', el), function(){ L.home_app = readOrder($('#o-app', el)); changed(); });
+    wireOrder($('#o-nav', el), function(){ var on = readOrder($('#o-nav', el)).filter(function(x){ return x.on || x.id === 'home' || x.id === 'me'; }).map(function(x){ return x.id; });
+      if (on.length < 3) { toast('Keep at least 3 items in the bottom bar'); pane('layout'); return; } S.bottom_nav = on; changed(); });
+    wireSegs(el, S);
+    var cr = $('#card_radius', el), ca = $('#cr-auto', el);
+    cr.addEventListener('input', function(){ S.card_radius = Number(cr.value); $('#cr-v', el).textContent = cr.value + 'px'; changed(); });
+    ca.addEventListener('change', function(){ cr.disabled = ca.checked; S.card_radius = ca.checked ? null : Number(cr.value); $('#cr-v', el).textContent = ca.checked ? 'auto' : cr.value + 'px'; changed(); });
+    var g = $('[data-goto5]', el); if (g) g.addEventListener('click', function(e){ e.preventDefault(); go('customize'); });
+  } else if (k === 'extras') {
+    el.innerHTML = v5card('Shape & spacing', '<div class="v5-lbl">Corners (whole site)</div>' + seg('radius', T.radius, [['sharp', 'Sharp (original)'], ['soft', 'Soft'], ['round', 'Round']]) +
+        '<div class="v5-lbl">Spacing</div>' + seg('density', S.density, [['comfortable', 'Comfortable'], ['compact', 'Compact']]) + '<div class="v5-lbl">Animations</div>' + seg('animations', String(S.animations), [['true', 'On'], ['false', 'Off']])) +
+      v5card('Announcement bar', fld('announce_text', 'Text (empty = the usual shipping line)', S.announce_text, 'text', 'maxlength="140" placeholder="Diwali sale: 10% off everything"') +
+        '<div class="v5-colors">' + colorFieldStyle('announce_bg', 'Bar colour', S.announce_bg) + colorFieldStyle('announce_fg', 'Bar text', S.announce_fg) + '</div>', 'The thin strip at the very top of the website.');
+    wireSegs(el, null, {radius: T, density: S, animations: S});
+    $('#announce_text', el).addEventListener('input', function(){ S.announce_text = this.value; changed(); });
+    wireColours(el, S);
+  } else if (k === 'advanced') {
+    el.innerHTML = v5card('Custom CSS (advanced)', '<textarea id="custom_css" rows="14" spellcheck="false" class="v5-code" placeholder=".hero h1 { letter-spacing: .02em; }">' + esc(S.custom_css || '') + '</textarea>',
+      'For fine changes the options above don\u2019t cover. Applied to the website and the app (not this dashboard, so a mistake can never lock you out). Outside links, @import and scripts are removed automatically. Max 12,000 characters.');
+    $('#custom_css', el).addEventListener('input', function(){ S.custom_css = this.value; changed(); });
+  } else if (k === 'history') {
+    el.innerHTML = v5card('Version history', (DS.versions.length ? '<ol class="v5-versions">' + DS.versions.map(function(v, i){ return '<li><div><b>#' + v.id + ' ' + esc(v.label) + '</b>' + (i === 0 ? ' <span class="pill ok">live</span>' : '') + '<br><span class="muted small">' + ist(v.created_at) + '</span></div>' + (i === 0 ? '' : '<button type="button" class="btn ghost small-btn" data-restore="' + v.id + '">Restore</button>') + '</li>'; }).join('') + '</ol>' : '<p class="muted small">Nothing published from here yet.</p>'),
+      'The last 20 published designs. Restore makes that version live again (and is itself kept, so you can undo it).') +
+      v5card('Changes log', '<p class="muted small">Every change you make in the dashboard is listed in <a href="#audit" data-goto5="audit">Audit log</a>.</p>');
+    $$('[data-restore]', el).forEach(function(b){ b.addEventListener('click', function(){ if (!confirm('Make version #' + b.getAttribute('data-restore') + ' live again?')) return; api('POST', '/api/admin/design/versions/' + b.getAttribute('data-restore') + '/restore', {}).then(function(s){ DS = s; D5 = clone(s.live); toast('Restored \u2014 live now'); drawDesign($('#panel')); }).catch(showErr); }); });
+    var g2 = $('[data-goto5]', el); if (g2) g2.addEventListener('click', function(e){ e.preventDefault(); go('audit'); });
+  }
+}
+function colorFieldStyle(k, label, val){ COLOR_LABEL[k] = label; return colorField(k, val, true); }
+function wireColours(el, target){
+  $$('.v5-color', el).forEach(function(box){
+    var k = box.getAttribute('data-ck'), obj = target && (k === 'announce_bg' || k === 'announce_fg') ? target : D5.theme, c = $('input[type=color]', box), tx = $('.v5-hex', box), au = $('.v5-auto', box);
+    function set(v){ obj[k] = v; box.classList.toggle('is-auto', !v); if (['primary','accent','background','text'].indexOf(k) >= 0) D5.theme.preset = 'custom'; changed(); }
+    c.addEventListener('input', function(){ tx.value = c.value.toUpperCase(); set(c.value.toUpperCase()); });
+    tx.addEventListener('input', function(){ var v = tx.value.trim(); if (v && v[0] !== '#') v = '#' + v; if (hexOk(v)) { c.value = v; set(v.toUpperCase()); } else if (!v && au) set(''); });
+    if (au) au.addEventListener('click', function(){ tx.value = ''; set(''); });
+  });
+}
+function wireSegs(el, obj, map){
+  $$('.v5-seg', el).forEach(function(sg){ var n = sg.getAttribute('data-seg'); if (n === 'pv') return;
+    sg.addEventListener('click', function(e){ var b = e.target.closest('button'); if (!b) return; $$('button', sg).forEach(function(x){ x.classList.toggle('on', x === b); });
+      var v = b.getAttribute('data-v'), o = (map && map[n]) || obj; if (/^grid_|app_grid/.test(n)) v = Number(v); if (v === 'true') v = true; if (v === 'false') v = false; o[n] = v; changed(); }); });
+}
+
+/* ---------- Security ---------- */
+function securityTab(p){
+  api('GET', '/api/admin/security').then(function(r){
+    var s = r.security;
+    p.innerHTML = '<div class="v4-head"><div><h2 style="margin:0">Security</h2><p class="muted small" style="margin:4px 0 0">Owner sign-in: on the normal login page type username <b>admin</b> and your owner password. Customers can never use this username.</p></div></div>' +
+      '<div class="v5-grid2">' +
+      v5card('How sign-in is protected', '<ul class="v5-list"><li>' + s.lock_after + ' wrong tries \u2192 that device is locked for ' + s.lock_minutes + ' minutes</li><li>Wrong password shows the same message as for customers (nobody learns that \u201Cadmin\u201D exists)</li><li>Owner pages check your owner session on the server for every action</li><li>Secure, HTTPS-only cookie; the app never stores an owner password or token</li><li>Wrong tries in the last 15 minutes (all devices): <b>' + s.failed_recently + '</b></li></ul>') +
+      v5card('Auto sign-out', '<form id="f-idle" novalidate>' + sel('idle_minutes', 'Sign me out after no activity for', s.idle_minutes, s.idle_choices.map(function(m){ return [m, m + ' minutes']; })) + saveBtn('Save') + '</form>') +
+      v5card('Owner PIN (optional second step)', '<form id="f-pin" novalidate><p class="note">' + (s.pin_enabled ? '<b>PIN is ON.</b> After your password you\u2019ll be asked for your PIN.' : 'Off. Turn it on and, after the password, a 4\u20136 digit PIN is asked too. If someone learns your password they still can\u2019t get in. Don\u2019t forget the PIN \u2014 write it down somewhere safe.') + '</p>' +
+        (s.pin_enabled ? '' : fld('pin', 'New PIN (4\u20136 digits)', '', 'password', 'inputmode="numeric" maxlength="6" autocomplete="off"')) + fld('pin_pw', 'Your current owner password', '', 'password', 'autocomplete="current-password" maxlength="128"') +
+        '<div class="form-alert hidden" role="alert"></div><button class="btn" type="submit">' + (s.pin_enabled ? 'Turn PIN off' : 'Turn PIN on') + '</button></form>') +
+      v5card('Change owner password', '<form id="f-pw" novalidate>' + fld('cur_pw', 'Current password', '', 'password', 'autocomplete="current-password" maxlength="128"') + fld('new_pw', 'New password', '', 'password', 'autocomplete="new-password" maxlength="128"') + fld('new_pw2', 'New password again', '', 'password', 'autocomplete="new-password" maxlength="128"') +
+        '<p class="note">At least 10 characters with a letter and a number. Other devices get signed out.</p><div class="form-alert hidden" role="alert"></div><button class="btn" type="submit">Change password</button></form>') + '</div>' +
+      v5card('Signed-in devices', '<div class="tablewrap"><table class="tbl"><thead><tr><th>Device</th><th>Signed in</th><th>Last active</th><th>Network</th></tr></thead><tbody>' + r.sessions.map(function(x){ return '<tr><td>' + esc(x.device) + (x.current ? ' <span class="pill ok">this device</span>' : '') + '</td><td>' + ist(x.signed_in) + '</td><td>' + ist(x.last_active) + '</td><td>' + esc(x.ip) + '</td></tr>'; }).join('') + '</tbody></table></div><button class="btn danger small-btn" type="button" id="logout-all" style="margin-top:12px">Sign out of all devices</button>') +
+      v5card('Owner sign-in history', '<div class="tablewrap"><table class="tbl"><thead><tr><th>Time</th><th>Result</th><th>Device / browser</th><th>Network</th></tr></thead><tbody>' + r.logins.map(function(x){ return '<tr><td>' + ist(x.time) + '</td><td>' + (x.success ? '<span class="pill ok">Signed in</span>' : '<span class="pill bad">Failed' + (x.reason ? ' \u00B7 ' + esc(x.reason.replace(/_/g, ' ')) : '') + '</span>') + '</td><td>' + esc(x.device) + '</td><td>' + esc(x.ip) + '</td></tr>'; }).join('') + '</tbody></table></div>');
+    wireSave($('#f-idle', p), function(){ return api('PUT', '/api/admin/security', {idle_minutes: Number($('#idle_minutes', p).value)}); });
+    $('#f-pin', p).addEventListener('submit', function(e){ e.preventDefault(); var f = this, b = $('button[type=submit]', f); clearAlert(f); busy(b, true);
+      api('PUT', '/api/admin/security', s.pin_enabled ? {pin_enabled: false, current_password: f.pin_pw.value} : {pin_enabled: true, pin: f.pin.value, current_password: f.pin_pw.value})
+        .then(function(){ toast(s.pin_enabled ? 'PIN turned off' : 'PIN turned on'); securityTab(p); }).catch(function(err){ busy(b, false); showFieldErrors(f, mapErr(err, {current_password: 'pin_pw'})); }); });
+    $('#f-pw', p).addEventListener('submit', function(e){ e.preventDefault(); var f = this, b = $('button[type=submit]', f); clearAlert(f); busy(b, true);
+      api('PUT', '/api/admin/security', {current_password: f.cur_pw.value, new_password: f.new_pw.value, confirm_password: f.new_pw2.value})
+        .then(function(){ toast('Password changed'); securityTab(p); }).catch(function(err){ busy(b, false); showFieldErrors(f, mapErr(err, {current_password: 'cur_pw', new_password: 'new_pw', confirm_password: 'new_pw2'})); }); });
+    $('#logout-all', p).addEventListener('click', function(){ if (!confirm('Sign out of the owner area on every device, including this one?')) return; api('POST', '/api/admin/logout-all', {}).then(function(){ location.href = '/admin'; }).catch(function(err){ toast(err.message); }); });
+  }).catch(fail(p, securityTab));
+}
+function mapErr(err, map){ if (err.fields) { var f = {}; Object.keys(err.fields).forEach(function(k){ f[map[k] || k] = err.fields[k]; }); err.fields = f; } return err; }
+
+/* ---------- Audit log ---------- */
+function auditTab(p){
+  api('GET', '/api/admin/audit').then(function(r){
+    p.innerHTML = '<div class="v4-head"><div><h2 style="margin:0">Audit log</h2><p class="muted small" style="margin:4px 0 0">Every change made in the owner dashboard: what, when and from which device. Passwords and keys are never written here.</p></div></div>' +
+      (r.entries.length ? '<div class="tablewrap"><table class="tbl v5-audit"><thead><tr><th>When</th><th>Area</th><th>What changed</th><th>Device</th></tr></thead><tbody>' + r.entries.map(function(e){
+        return '<tr><td style="white-space:nowrap">' + ist(e.time) + '</td><td>' + esc(e.area) + '</td><td><b>' + esc(e.summary || e.action) + '</b>' + (e.summary ? '<br><span class="muted small">' + esc(e.action) + '</span>' : '') +
+          (e.detail && e.detail.length ? '<details><summary class="small">Details (' + e.detail.length + ')</summary><ul class="small v5-diff">' + e.detail.map(function(d){ return '<li><code>' + esc(d.key) + '</code>: ' + esc(fmtV(d.from)) + ' \u2192 <b>' + esc(fmtV(d.to)) + '</b></li>'; }).join('') + '</ul></details>' : '') + '</td><td>' + esc(e.device) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="state"><p>No changes recorded yet.</p></div>');
+  }).catch(fail(p, auditTab));
+}
+function fmtV(v){ if (v === undefined || v === null || v === '') return '(auto)'; if (typeof v === 'object') return JSON.stringify(v).slice(0, 80); return String(v); }
+
 /* ---------- Orders: notes, refund note, timeline ---------- */
 function orderExtras(list){
   $$('.acard[data-id]', list).forEach(function(card){
@@ -685,6 +902,8 @@ function boot(){
   offline();
   var root = $('#admin-root'), setup = $('#setup-root');
   if (setup) return setupPage(setup);
+  if (location.pathname === '/admin/handoff' && root) return handoffPage(root);
+  appBackButton();
   if (!root) return;
   api('GET', '/api/admin/me').then(function(){ dashboard(root); }, function(err){
     if (err.status !== 403) { root.innerHTML = errorBox(err, true); $('[data-retry]', root).addEventListener('click', boot); return; }

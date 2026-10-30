@@ -17,6 +17,7 @@ var CAP = window.Capacitor, NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNat
 var PLUG = NATIVE ? (CAP.Plugins || {}) : {};
 var BASE = NATIVE ? 'https://avermontis.sites.tab.bot' : '';
 var TOKEN_KEY = 'avm_app_token', CAT_KEY = 'avm_app_catalog';
+var PREVIEW = /[?&]avm_preview=1/.test(location.search) && window.parent !== window;   // shown inside the owner's design studio
 function absUrl(u) { return /^\//.test(u) ? BASE + u : u; }
 
 /* ---------- facts copied from the website (assets/app.js), not new claims ---------- */
@@ -171,7 +172,7 @@ function toggleWish(id, el) {
 }
 
 /* ---------- skin profile -> routine (built only from store products and their own directions) ---------- */
-function profile() { return get(K.profile, null); }
+function profile() { var p = get(K.profile, null); return p || (PREVIEW ? { name: '', skin: 'normal', concerns: ['dullness'], style: 'simple' } : null); }
 function routineFor(pr, when) {
   pr = pr || {}; var concerns = pr.concerns || [], essential = pr.style === 'essential';
   var onlyTone = concerns.length === 1 && concerns[0] === 'uneven-tone';
@@ -409,26 +410,30 @@ function emptyBox(icon, t, s, btn) { return '<div class="empty"><div class="ei">
 function greeting() { var h = new Date().getHours(); return h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
 RENDER.home = function (el) {
   var pr = profile() || {};
-  el.innerHTML = '<div class="topbar"><span class="wordmark">Avermontis</span>' + bagBtn() + '</div>' +
+  var SEC = {
+    banners: function () { return '<div id="h-banners">' + bannersHtml() + '</div>'; },
+    today: function () { return '<div id="h-today"><div class="sk" style="height:200px;margin-top:18px"></div></div><div id="h-rem"></div>'; },
+    picks: function () { return '<div class="sec"><h2>For your skin</h2><button type="button" class="link" data-go="shop">See all</button></div><div class="hscroll" id="h-picks">' + skeletonCards(3) + '</div>'; },
+    ar: function () { return arHomeHtml(); },
+    order: function () { return '<div id="h-order"></div>'; },
+    explore: function () { return '<div class="sec"><h2>Explore</h2></div><div class="tiles"><button type="button" class="tile press" data-go="diary"><img src="/img/story.webp" alt="">' + '<b>Skin diary</b><span>Private photos &amp; notes</span></button>' +
+      '<button type="button" class="tile press" data-go="learn"><img src="/img/ritual.webp" alt=""><b>Ingredients</b><span>What\u2019s inside, plainly</span></button></div>'; },
+    ingredient: function () { return '<div class="sec"><h2>Ingredient of the day</h2></div><div id="h-ing"></div>'; }
+  };
+  var order = (UI.layout && UI.layout.home_app) || ['banners', 'today', 'picks', 'ar', 'order', 'explore', 'ingredient'].map(function (id) { return { id: id, on: true }; });
+  var body = order.filter(function (x) { return x.on !== false && SEC[x.id]; }).map(function (x) { return '<div class="v4-sec" data-sec="' + x.id + '">' + SEC[x.id]() + '</div>'; }).join('');
+  el.innerHTML = '<div class="topbar"><span class="wordmark">' + esc(storeName()) + '</span><span style="display:flex;gap:8px">' + chatBtn() + bellBtn() + bagBtn() + '</span></div>' +
     '<p class="greet">' + greeting() + (pr.name ? ',<br><em>' + esc(pr.name) + '</em>' : '') + '</p>' +
-    '<div class="profile-pill">' + profilePills(pr) + '</div>' +
-    '<div id="h-today"><div class="sk" style="height:200px;margin-top:18px"></div></div>' +
-    '<div id="h-rem"></div>' +
-    '<div class="sec"><h2>For your skin</h2><button type="button" class="link" data-go="shop">See all</button></div>' +
-    '<div class="hscroll" id="h-picks">' + skeletonCards(3) + '</div>' +
-    '<div id="h-order"></div>' +
-    '<div class="sec"><h2>Explore</h2></div>' +
-    '<div class="tiles"><button type="button" class="tile press" data-go="diary"><img src="/img/story.webp" alt="">' + '<b>Skin diary</b><span>Private photos &amp; notes</span></button>' +
-    '<button type="button" class="tile press" data-go="learn"><img src="/img/ritual.webp" alt=""><b>Ingredients</b><span>What\u2019s inside, plainly</span></button></div>' +
-    '<div class="sec"><h2>Ingredient of the day</h2></div><div id="h-ing"></div>';
+    '<div class="profile-pill">' + profilePills(pr) + '</div>' + body;
+  loadNotes();
   ptr(el, function () { return Promise.all([loadCatalog(true), orders(true)]).then(function () { rerender('home'); }); });
   loadCatalog().then(function () {
     paintHome();
     var picks = picksFor(pr);
-    $('#h-picks').innerHTML = picks.map(card).join('');
+    if ($('#h-picks')) $('#h-picks').innerHTML = picks.map(card).join('');
     var ings = INGREDIENTS.filter(function (i) { return P.some(function (p) { return hasIng(p, i); }); });
     var d = new Date(), idx = (d.getFullYear() * 400 + d.getMonth() * 31 + d.getDate()) % (ings.length || 1), ing = ings[idx];
-    if (ing) $('#h-ing').innerHTML = '<button type="button" class="ing-day press" style="width:100%;text-align:left" data-ing="' + esc(ing.key) + '"><span class="eyebrow">' + esc(ing.sub) + '</span><h3>' + esc(ing.name) + '</h3><p>' + esc(ing.text) + '</p></button>';
+    if (ing && $('#h-ing')) $('#h-ing').innerHTML = '<button type="button" class="ing-day press" style="width:100%;text-align:left" data-ing="' + esc(ing.key) + '"><span class="eyebrow">' + esc(ing.sub) + '</span><h3>' + esc(ing.name) + '</h3><p>' + esc(ing.text) + '</p></button>';
   });
   orders().then(function (list) {
     var o = list[0]; if (!o || !$('#h-order')) return;
@@ -625,6 +630,7 @@ function productSheet(id) {
     '<div class="pd-meta"><span class="eyebrow">' + esc(p.category || '') + (p.size ? ' \u00B7 ' + esc(p.size) : '') + '</span><button type="button" class="heart' + (w ? ' on' : '') + '" style="position:static;background:var(--card2)" data-wish="' + esc(p.id) + '" aria-label="Save to wishlist">' + I.heart + '</button></div>' +
     '<h2>' + esc(p.name) + '</h2><p class="muted" style="margin:0 0 10px">' + esc(p.short || '') + '</p>' +
     '<div class="pd-price"><b>' + inr(p.price) + '</b>' + (o ? '<s>' + inr(p.mrp) + '</s><span class="off">' + o + '% off</span>' : '') + '</div><p class="small muted" style="margin:2px 0 0">Inclusive of GST \u00B7 Cash on Delivery</p>' +
+    productExtras(p) +
     (place.length ? '<div class="fit">' + I.sparkle + '<span>In your ritual: <b>' + place.join(' \u00B7 ') + '</b></span></div>' : '') +
     '<details class="acc" open><summary>Key ingredients' + I.down + '</summary><div class="ab"><div class="ingchips">' + (p.ingredients || []).map(function (n) { var k = INGREDIENTS.filter(function (i) { return n.toLowerCase().indexOf(i.key) >= 0 || (i.also && n.toLowerCase().indexOf(i.also) >= 0); })[0]; return k ? '<button type="button" class="ingchip k" data-ing="' + esc(k.key) + '">' + esc(n) + '</button>' : '<span class="ingchip">' + esc(n) + '</span>'; }).join('') + '</div><p class="small" style="margin:8px 0 0">The complete ingredient list is printed on the pack.</p></div></details>' +
     '<details class="acc"><summary>How to use' + I.down + '</summary><div class="ab">' + esc(p.how_to_use || '') + '</div></details>' +
@@ -693,7 +699,7 @@ function paintBag() {
   var away = SET.free_shipping_from - t.items_subtotal;
   b.innerHTML = lines.map(function (l) {
     return '<div class="bline"><img src="' + esc(img(l.p)) + '" alt="" data-prod="' + esc(l.p.id) + '"><div><b>' + esc(l.p.name) + '</b><span class="small muted">' + esc(l.p.size || '') + ' \u00B7 ' + inr(l.p.price) + '</span>' +
-      '<div class="bm"><div class="qty"><button type="button" data-q="' + esc(l.p.id) + '" data-d="-1" aria-label="Less">' + (l.qty === 1 ? I.trash.replace('<svg', '<svg width="16" height="16"') : '\u2212') + '</button><span>' + l.qty + '</span><button type="button" data-q="' + esc(l.p.id) + '" data-d="1" aria-label="More">+</button></div><b style="font-family:var(--sans);font-size:1rem">' + inr(l.total) + '</b></div></div></div>';
+      '<div class="bm"><div class="qty"><button type="button" data-q="' + esc(l.p.id) + '" data-d="-1" aria-label="Less">' + (l.qty === 1 ? I.trash.replace('<svg', '<svg width="16" height="16"') : '\u2212') + '</button><span>' + l.qty + '</span><button type="button" data-q="' + esc(l.p.id) + '" data-d="1" aria-label="More">+</button></div><b style="font-family:var(--sans);font-size:1rem">' + inr(l.total) + '</b></div>' + (canBargain(l.p) ? '<button type="button" class="v4-bl-offer press" data-offer="' + esc(l.p.id) + '">' + V4I.tag + ' Make an offer</button>' : '') + '</div></div>';
   }).join('') +
     '<div class="ship">' + (away > 0 ? 'Add ' + inr(away) + ' more for free shipping' : 'You\u2019ve unlocked free shipping') + '<div class="bar"><i style="width:' + Math.min(100, t.items_subtotal / SET.free_shipping_from * 100) + '%"></i></div></div>' +
     '<div class="field" style="display:flex;gap:8px;margin-bottom:10px"><input class="inp" id="b-code" placeholder="Coupon code" value="' + esc(code) + '" autocapitalize="characters" aria-label="Coupon code" style="flex:1"><button type="button" class="btn sm ghost press" id="b-apply">Apply</button></div><div id="b-cmsg"></div>' +
@@ -809,11 +815,16 @@ RENDER.me = function (el) {
     '<div class="sec"><h2>Orders &amp; help</h2></div><div class="list">' +
     '<button type="button" class="li press" data-track=""><span class="lic">' + I.truck + '</span><span class="lt"><b>Track an order</b><span>With your order number and phone</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' +
     '<button type="button" class="li press" data-act="address"><span class="lic">' + I.pin + '</span><span class="lt"><b>Saved address</b><span id="m-addr">On this phone</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' +
+    (feat('chat') ? '<button type="button" class="li press" data-act="chat"><span class="lic">' + V4I.chat + '</span><span class="lt"><b>Ask the assistant</b><span>Products, routine, orders \u2014 English, Hinglish, \u0939\u093F\u0902\u0926\u0940</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
+    (feat('notifications') ? '<button type="button" class="li press" data-act="notes"><span class="lic">' + I.bell + '</span><span class="lt"><b>Notifications</b><span>Offers and order updates</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
     '<a class="li press" href="mailto:' + SUPPORT + '"><span class="lic">' + I.help + '</span><span class="lt"><b>Help</b><span>' + SUPPORT + '</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
     '<a class="li press" href="/shipping"><span class="lic">' + I.box + '</span><span class="lt"><b>Shipping &amp; returns</b><span>Delivery and return policy</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
     '<a class="li press" href="/privacy"><span class="lic">' + I.lock + '</span><span class="lt"><b>Privacy &amp; terms</b><span>Your diary stays on your phone</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
-    '<a class="li press" href="/?view=site"><span class="lic">' + I.globe + '</span><span class="lt"><b>Open the website</b><span>avermontis.sites.tab.bot</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a></div>' +
-    '<div id="m-out"></div><p class="small muted" style="text-align:center;margin-top:22px">AVERMONTIS app 2.0</p>';
+    (feat('ar') ? '<button type="button" class="li press" data-act="ar"><span class="lic">' + V4I.cube + '</span><span class="lt"><b>AR &amp; 3D</b><span>In your room, glow selfie, scan your bottle</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
+    (NATIVE && NATIVE_PLUG() && NATIVE_PLUG().setIcon ? '<button type="button" class="li press" data-act="icon"><span class="lic">' + I.sparkle + '</span><span class="lt"><b>App icon</b><span>Pick the home-screen icon you like</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
+    '<a class="li press" href="/?view=site"><span class="lic">' + I.globe + '</span><span class="lt"><b>Open the website</b><span>avermontis.sites.tab.bot</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
+    '<button type="button" class="li press" data-act="owner"><span class="lic">' + I.lock + '</span><span class="lt"><b>Store owner?</b><span>Sign in with username admin to customise the app</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button></div>' +
+    '<div id="m-out"></div><p class="small muted" style="text-align:center;margin-top:22px">AVERMONTIS app ' + APP_VERSION + '</p>';
   var a = get(ADDR, null); if (a && a.city) $('#m-addr').textContent = a.name + ' \u00B7 ' + a.city + ' ' + (a.pincode || '');
   ptr(el, function () { return Promise.all([me(true), loadCatalog(true)]).then(function () { ordersP = null; rerender('me'); }); });
   Promise.all([loadCatalog(), me()]).then(function (r) {
@@ -838,7 +849,7 @@ function authSheet(mode) {
   openSheet('<div class="tabs2"><button type="button" data-mode="login" class="' + (mode === 'login' ? 'on' : '') + '">Sign in</button><button type="button" data-mode="signup" class="' + (mode === 'signup' ? 'on' : '') + '">Create account</button></div>' +
     '<h2>' + (mode === 'login' ? 'Welcome back' : 'Create your account') + '</h2><p class="muted small">Same account as the AVERMONTIS website.</p>' +
     '<form id="a-form" novalidate>' + (mode === 'signup' ? '<div class="field" data-f="name"><label for="a-name">Name</label><input class="inp" id="a-name" name="name" autocomplete="name" maxlength="60"><div class="err"></div></div>' : '') +
-    '<div class="field" data-f="email"><label for="a-email">Email</label><input class="inp" id="a-email" name="email" type="email" autocomplete="email" maxlength="254"><div class="err"></div></div>' +
+    '<div class="field" data-f="email"><label for="a-email">' + (mode === 'login' ? 'Email or username' : 'Email') + '</label><input class="inp" id="a-email" name="email" type="' + (mode === 'login' ? 'text' : 'email') + '" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="' + (mode === 'login' ? 'username' : 'email') + '" maxlength="254"><div class="err"></div></div>' +
     '<div class="field" data-f="password"><label for="a-pw">Password</label><input class="inp" id="a-pw" name="password" type="password" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" maxlength="128"><div class="err"></div></div>' +
     (mode === 'signup' ? '<p class="small muted">At least 8 characters, with a letter and a number.</p>' : '<p class="small"><a href="/forgot">Forgot password?</a></p>') +
     '<div id="a-alert"></div><button class="btn press" type="submit" id="a-go">' + (mode === 'login' ? 'Sign in' : 'Create account') + '</button></form>');
@@ -847,17 +858,34 @@ function authSheet(mode) {
     e.preventDefault(); var f = this, btn = $('#a-go'); $('#a-alert').innerHTML = ''; $$('.field', f).forEach(function (x) { x.classList.remove('bad'); });
     var body = { email: f.email.value.trim(), password: f.password.value }; if (f.name) body.name = f.name.value.trim();
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-    api('POST', '/api/auth/' + mode, body).then(function () {
+    api('POST', '/api/auth/' + mode, body).then(function (r) {
+      if (r && (r.admin || r.step === 'pin')) { ownerSignedIn(r); throw { owner: true }; }
       buzz(20); meP = null; ordersP = null; wishSrv = null;
       var local = get(K.wish, []);
       return me(true).then(function (u) { return Promise.all(local.map(function (id) { return api('POST', '/api/account/wishlist', { product_id: id }).catch(function () {}); })).then(function () { put(K.wish, []); return u; }); });
     }).then(function (u) { closeSheet(); toast('Signed in' + (u && u.name ? ' \u00B7 ' + firstName(u.name) : '')); rerender('me'); })
       .catch(function (err) {
+        if (err && err.owner) return;
         btn.disabled = false; btn.textContent = mode === 'login' ? 'Sign in' : 'Create account';
         if (err.fields) Object.keys(err.fields).forEach(function (k) { var x = f.querySelector('[data-f="' + k + '"]'); if (x) { x.classList.add('bad'); x.querySelector('.err').textContent = err.fields[k]; } });
         $('#a-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>';
       });
   });
+}
+/* v5: the store owner signs in on the same sheet with username "admin" + the owner password (+ PIN if on).
+   The website then has the owner cookie; the installed app gets a one-time code that the site's own page swaps for that
+   cookie inside the app (the app itself never keeps an owner password or token). */
+function ownerSignedIn(r) {
+  if (r.step === 'pin') {
+    openSheet('<span class="eyebrow">Store owner</span><h2>Enter your PIN</h2><p class="muted small">Second step: your 4\u20136 digit owner PIN.</p><form id="pin-form" novalidate><div class="field"><label for="o-pin">Owner PIN</label><input class="inp" id="o-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><div class="err"></div></div><div id="pin-alert"></div><button class="btn press" type="submit" id="pin-go">Continue</button></form>');
+    $('#pin-form').addEventListener('submit', function (e) { e.preventDefault(); var v = $('#o-pin').value.trim(), b = $('#pin-go');
+      if (!/^\d{4,6}$/.test(v)) { $('#pin-alert').innerHTML = '<div class="alert">Enter 4 to 6 digits.</div>'; return; }
+      b.disabled = true; api('POST', '/api/auth/admin-pin', { challenge: r.challenge, pin: v }).then(ownerSignedIn, function (err) { b.disabled = false; $('#pin-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>'; }); });
+    return;
+  }
+  closeSheet(); toast('Opening the owner area\u2026');
+  if (NATIVE && r.open) { location.href = BASE + r.open; return; }    // stays inside the app (allowNavigation) and lands on /admin
+  location.href = r.redirect || '/admin';
 }
 function trackSheet(id) {
   var a = get(ADDR, {}) || {};
@@ -980,26 +1008,343 @@ document.addEventListener('click', function (e) {
     else if (a === 'snap') $('#cam').click();
     else if (a === 'quiz') startQuiz(true);
     else if (a === 'address') addressSheet();
+    else if (a === 'chat') chatOpen();
+    else if (a === 'notes') notesSheet();
+    else if (a === 'ar') loadCatalog().then(function () { arSheet(); });
+    else if (a === 'icon') iconSheet();
+    else if (a === 'owner') { authSheet('login'); var ae = $('#a-email'); if (ae) { ae.value = 'admin'; var pw = $('#a-pw'); if (pw) pw.focus(); } }
     else if (a === 'logout') api('POST', '/api/auth/logout', {}).catch(function () {}).then(function () { if (NATIVE) { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} } meP = null; ordersP = null; wishSrv = null; toast('Signed out'); rerender('me'); });
   }
 });
 document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.matches && e.target.matches('.pcard')) productSheet(e.target.getAttribute('data-prod')); });
 function closeSheetQuiet() { if (sheetOpen) { sheetOpen = false; $('#scrim').classList.remove('on'); $('#sheet').classList.remove('on'); if (history.state && history.state.sheet) history.replaceState(null, '', location.hash); } }
 
+
+/* =====================================================================================================
+   v4: live look from the owner's dashboard (colours, fonts, light/dark, home order, name, banners),
+   assistant chat, notifications bell, AR (3D / in your room, glow selfie, bottle scan), Make an offer,
+   app icon choice. Config comes from /api/config, is cached on the phone, and falls back to the built-in look offline.
+   ===================================================================================================== */
+var CFG_KEY = 'avm_app_cfg_v4', ICON_KEY = 'avm_app_icon_mine', SEEN_N = 'avm_app_seen_notes', CHAT_KEY = 'avm_app_chat_v1';
+var CFG = get(CFG_KEY, null) || {}, UI = CFG.ui || {}, NOTES = [];
+var NATIVE_PLUG = function () { return PLUG.AvmNative || null; };
+var APP_VERSION = '5.0.0';
+function hx(h) { h = String(h || ''); return /^#[0-9a-f]{6}$/i.test(h) ? h : null; }
+function rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+function mix(a, b, t) { var x = rgb(a), y = rgb(b); return '#' + x.map(function (v, i) { return ('0' + Math.round(v + (y[i] - v) * t).toString(16)).slice(-2); }).join(''); }
+function rgbaOf(h, a) { var c = rgb(h); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+var FONT_STACK = { cormorant: '"Cormorant","Cormorant Garamond",Georgia,serif', playfair: '"Playfair Display",Georgia,serif', georgia: 'Georgia,"Times New Roman",serif', system: 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif', poppins: '"Poppins",system-ui,-apple-system,Roboto,Arial,sans-serif' };
+function themeVars(t) {
+  if (!t) return '';
+  var v = {}, pr = hx(t.primary), ac = hx(t.accent), bg = hx(t.background), tx = hx(t.text);
+  var original = t.preset === 'obsidian' && t.app_mode !== 'light';
+  if (!original && pr && ac && bg && tx) {
+    if (t.app_mode === 'light') {
+      v['--ob'] = bg; v['--ob2'] = mix(bg, pr, .035); v['--card'] = mix(bg, '#FFFFFF', .7); v['--card2'] = mix(bg, pr, .06);
+      v['--line'] = rgbaOf(pr, .10); v['--line2'] = rgbaOf(pr, .2); v['--ivory'] = pr; v['--text'] = tx; v['--muted'] = mix(tx, bg, .38); v['--muted2'] = mix(tx, bg, .52);
+      v['--gold'] = mix(ac, pr, .25); v['--gold2'] = ac; v['--goldd'] = mix(ac, pr, .45); v['--ok'] = '#2F6B45'; v['--err'] = '#B3261E';
+    } else {
+      var base = mix(pr, '#000000', .15);
+      v['--ob'] = base; v['--ob2'] = mix(base, '#FFFFFF', .03); v['--card'] = mix(base, '#FFFFFF', .055); v['--card2'] = mix(base, '#FFFFFF', .09);
+      v['--line'] = 'rgba(232,220,200,.10)'; v['--line2'] = 'rgba(232,220,200,.18)'; v['--gold'] = ac; v['--gold2'] = mix(ac, '#FFFFFF', .3); v['--goldd'] = mix(ac, '#000000', .25);
+    }
+  }
+  if (t.heading_font && t.heading_font !== 'cormorant' && FONT_STACK[t.heading_font]) v['--serif'] = FONT_STACK[t.heading_font];
+  if (t.body_font && t.body_font !== 'system' && FONT_STACK[t.body_font]) v['--sans'] = FONT_STACK[t.body_font];
+  var keys = Object.keys(v); if (!keys.length) return '';
+  return ':root{' + keys.map(function (k) { return k + ':' + v[k]; }).join(';') + '}' + (v['--ob'] ? APP_THEMED_CSS : '') + (t.app_mode === 'light' ? APP_LIGHT_CSS : '');
+}
+var APP_THEMED_CSS = '.today{background:radial-gradient(120% 90% at 100% 0%,color-mix(in srgb,var(--gold) 25%,transparent),transparent 55%),linear-gradient(160deg,var(--card2),var(--ob2))}.ring>div{background:var(--ob2)}' +
+  '.sk{background:linear-gradient(90deg,var(--card) 0%,var(--card2) 40%,var(--card) 80%);background-size:300% 100%}.sheet,.sheet .sfoot{background:var(--ob2)}.tabbar{background:color-mix(in srgb,var(--ob) 88%,transparent)}body{background:var(--ob)}' +
+  '.tile::after{background:linear-gradient(180deg,transparent 20%,color-mix(in srgb,var(--ob) 88%,transparent))}';
+var APP_LIGHT_CSS = 'html.lightapp .icon{background:rgba(0,0,0,.04)}html.lightapp .tile::after{background:linear-gradient(180deg,transparent 15%,rgba(255,255,255,.92))}html.lightapp .tile img{opacity:.5}' +
+  'html.lightapp .btn{color:#fff;background:linear-gradient(180deg,var(--gold2),var(--gold))}html.lightapp .sheet,html.lightapp .tabbar{background:var(--card)}html.lightapp .badge{color:#fff}';
+function applyLook() {
+  if (window.__avmPreview) return;      // the owner's design studio is showing a draft in this frame
+  var t = UI.theme || null, server = typeof UI.app_css === 'string', css = server ? UI.app_css : themeVars(t), st = document.getElementById('avm-app-theme');
+  if (!st) { st = document.createElement('style'); st.id = 'avm-app-theme'; document.head.appendChild(st); }
+  st.textContent = css;
+  // v5: the server sends the whole look (colours, dark/auto, fonts, cards, buttons, bottom bar, custom CSS) as one CSS string
+  var light = !!(t && css && (t.app_mode === 'light' || (t.app_mode === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches)));
+  if (server) { document.documentElement.classList.remove('lightapp'); document.documentElement.classList.toggle('themed', !!css); syncChrome(light); applyNav(); return; }
+  document.documentElement.classList.toggle('lightapp', light); document.documentElement.classList.toggle('themed', !!css);
+  syncChrome(light);
+}
+function syncChrome(light) {
+  var ob = getComputedStyle(document.documentElement).getPropertyValue('--ob').trim() || '#0B0C0B';
+  var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', ob);
+  var cs = document.querySelector('meta[name=color-scheme]'); if (cs) cs.setAttribute('content', light ? 'light' : 'dark');
+  if (NATIVE && PLUG.StatusBar) { try { PLUG.StatusBar.setStyle({ style: light ? 'LIGHT' : 'DARK' }); PLUG.StatusBar.setBackgroundColor({ color: ob }); } catch (e) {} }
+  var name = storeName(); $$('.wordmark').forEach(function (w) { w.textContent = name; });
+}
+// v5: the owner picks the bottom bar items and their order (Home and Me always stay)
+function applyNav() {
+  var bar = $('#tabbar'); if (!bar) return;
+  var want = (UI.style && Array.isArray(UI.style.bottom_nav) && UI.style.bottom_nav.length >= 3) ? UI.style.bottom_nav : null;
+  $$('#tabbar button').forEach(function (b) { var id = b.getAttribute('data-go'), i = want ? want.indexOf(id) : 0; b.style.order = want && i >= 0 ? i + 1 : ''; b.hidden = !!(want && i < 0 && id !== 'home' && id !== 'me'); });
+}
+if (window.matchMedia) { try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { applyLook(); }); } catch (e) {} }
+/* the owner's design studio shows this screen in a frame and sends draft CSS (nothing is saved here) */
+if (/[?&]avm_preview=1/.test(location.search) && window.parent !== window) {
+  window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin) return; var d = e.data || {};
+    if (d.type !== 'avm-app-css') return;
+    window.__avmPreview = true;
+    var st = document.getElementById('avm-app-theme'); if (!st) { st = document.createElement('style'); st.id = 'avm-app-theme'; document.head.appendChild(st); }
+    st.textContent = d.css || ''; document.documentElement.classList.remove('lightapp');
+    if (d.style) { UI.style = d.style; applyNav(); }
+  });
+  setTimeout(function () { try { parent.postMessage({ type: 'avm-preview-ready' }, location.origin); } catch (e) {} }, 300);
+}
+function storeName() { return (UI.brand && UI.brand.store_name) || 'Avermontis'; }
+function feat(k) { return !UI.features || UI.features[k] !== false; }
+function loadConfig() {
+  return api('GET', '/api/config').then(function (b) {
+    var c = b.config || {}, changed = c.ui_version !== CFG.ui_version;
+    CFG = c; UI = c.ui || {}; put(CFG_KEY, c);
+    if (c.free_shipping_from != null) { SET.free_shipping_from = c.free_shipping_from; SET.shipping_fee = c.shipping_fee; }
+    if (changed) { applyLook(); if (current === 'home') rerender('home'); if (current === 'me') rerender('me'); }
+    syncIcon();
+    return c;
+  }, function () { return CFG; });
+}
+/* ---------- app icon (activity aliases in the Android app) ---------- */
+var ICONS = { avr: 'AVR \u2014 green on white', avr_gold: 'AVR \u2014 gold on black', avr_green: 'AVR \u2014 white on green', classic: 'Classic gold A' };
+function syncIcon() {
+  var N = NATIVE_PLUG(); if (!N || !N.setIcon) return;
+  var want = get(ICON_KEY, null) || (UI.brand && UI.brand.app_icon) || 'avr';
+  if (!ICONS[want]) return;
+  N.getIcon().then(function (r) { if (r && r.name !== want) return N.setIcon({ name: want }); }).catch(function () {});
+}
+function iconSheet() {
+  var cur = get(ICON_KEY, null);
+  openSheet('<span class="eyebrow">App icon</span><h2 style="margin:6px 0 4px">Choose your icon</h2><p class="small muted">The home-screen icon changes in a few seconds. Some phones move the icon back to the app drawer \u2014 just add it to your home screen again.</p><div class="v4-icons">' +
+    Object.keys(ICONS).map(function (k) { return '<button type="button" class="v4-icon press' + ((cur || (UI.brand && UI.brand.app_icon) || 'avr') === k ? ' on' : '') + '" data-icon="' + k + '"><img src="/assets/icons4/' + k + '.png" alt=""><span>' + ICONS[k] + '</span></button>'; }).join('') + '</div>' +
+    '<button type="button" class="btn ghost sm" data-icon="">Follow the store\u2019s choice</button>');
+  $$('[data-icon]', $('#sheet-body')).forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-icon'); put(ICON_KEY, k || null); syncIcon(); closeSheet(); toast(k ? 'Icon changed to ' + ICONS[k] : 'Following the store\u2019s icon'); }); });
+}
+/* ---------- banners (owner's offers) ---------- */
+function openLink(href) {
+  href = String(href || ''); if (!href) return;
+  var m = /^\/product\?id=([a-z0-9-]+)/i.exec(href); if (m) { loadCatalog().then(function () { productSheet(m[1]); }); return; }
+  if (/^\/(shop|collections)(\/|$|\?)/.test(href)) { go('shop'); return; }
+  if (/^\/ar(\?|$)/.test(href)) { arSheet(); return; }
+  var url = /^\//.test(href) ? (NATIVE ? BASE + href : href) : href;
+  if (NATIVE && PLUG.AppLauncher) PLUG.AppLauncher.openUrl({ url: url }).catch(function () { toast('Could not open that link.'); }); else window.open(url, '_blank', 'noopener');
+}
+function bannersHtml() {
+  var list = (UI.banners || []).filter(function (b) { return b.title || b.image; }); if (!list.length) return '';
+  return '<div class="hscroll v4-banners">' + list.map(function (b) {
+    return '<button type="button" class="v4-banner press" data-link="' + esc(b.link || '') + '">' + (b.image ? '<img src="' + esc(img(b.image)) + '" alt="">' : '') + '<span class="v4-bt"><b>' + esc(b.title) + '</b>' + (b.text ? '<em>' + esc(b.text) + '</em>' : '') + (b.cta ? '<i>' + esc(b.cta) + ' \u2192</i>' : '') + '</span></button>'; }).join('') + '</div>';
+}
+/* ---------- notifications bell ---------- */
+function bellBtn() { return feat('notifications') ? '<button type="button" class="icon press v4-bell" data-act="notes" aria-label="Notifications">' + I.bell + '<span class="badge" data-n="0"></span></button>' : ''; }
+function chatBtn() { return feat('chat') ? '<button type="button" class="icon press" data-act="chat" aria-label="Ask the assistant">' + V4I.chat + '</button>' : ''; }
+function loadNotes() {
+  if (!feat('notifications')) return Promise.resolve([]);
+  return api('GET', '/api/notifications').then(function (b) {
+    NOTES = b.items || []; var seen = get(SEEN_N, null), first = seen === null; seen = seen || [];
+    var fresh = NOTES.filter(function (n) { return seen.indexOf(n.id) < 0; });
+    paintBell(fresh.length);
+    if (first) put(SEEN_N, NOTES.map(function (n) { return n.id; }));
+    else if (fresh.length && NATIVE && LN) {
+      var n = fresh[0];
+      try { LN.schedule({ notifications: [{ id: 900000 + (Date.now() % 90000), title: n.title, body: n.body || (fresh.length > 1 ? fresh.length + ' new updates' : ''), channelId: 'ritual', smallIcon: 'ic_stat_avermontis', extra: { go: 'home', notes: 1 } }] }).catch(function () {}); } catch (e) {}
+    }
+    return NOTES;
+  }, function () { return NOTES; });
+}
+function paintBell(n) { $$('.v4-bell .badge').forEach(function (b) { b.textContent = n || ''; b.setAttribute('data-n', n || 0); }); }
+function notesSheet() {
+  var seen = get(SEEN_N, []) || [];
+  openSheet('<span class="eyebrow">Updates</span><h2 style="margin:6px 0 12px">Notifications</h2>' + (NOTES.length ? '<div class="list">' + NOTES.map(function (n) {
+    return '<button type="button" class="li press v4-note' + (seen.indexOf(n.id) < 0 ? ' new' : '') + '"' + (n.order_id ? ' data-track="' + esc(n.order_id) + '"' : n.link ? ' data-link="' + esc(n.link) + '"' : '') + '><span class="lic">' + (n.kind === 'order' ? I.truck : n.kind === 'tip' ? I.leaf : I.sparkle) + '</span><span class="lt"><b>' + esc(n.title) + '</b><span>' + esc(n.body || '') + (n.body ? ' \u00B7 ' : '') + fmtDate(n.at) + '</span></span></button>'; }).join('') + '</div>' : emptyBox(I.bell, 'Nothing yet', 'Offers from the store and updates on your orders show up here.')));
+  put(SEEN_N, NOTES.map(function (n) { return n.id; }).concat(seen).slice(0, 200)); paintBell(0);
+}
+/* ---------- assistant chat ---------- */
+var V4I = {
+  chat: ic('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.4"/>'),
+  send: ic('<path d="M4 12l16-8-6 16-2.5-6.5z"/>'),
+  cube: ic('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>'),
+  face: ic('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c1 1.2 2.1 1.8 3.5 1.8s2.5-.6 3.5-1.8M9 9.5h.01M15 9.5h.01" stroke-width="2"/>'),
+  scan: ic('<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><rect x="9" y="7" width="6" height="10" rx="1.5"/>'),
+  tag: ic('<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>'),
+  wa: ic('<path d="M20 12a8 8 0 0 1-11.8 7L4 20l1.1-4A8 8 0 1 1 20 12z"/><path d="M9 9.5c.3 1.8 2.6 4.4 5 5l1-1.4-1.6-1-1 .6c-.8-.4-1.6-1.2-2-2l.6-1-1-1.6z"/>')
+};
+var chatSt = null;
+function chatState() { if (!chatSt) { chatSt = get(CHAT_KEY, null); if (!chatSt || !(chatSt.t > Date.now() - 6 * 3600e3)) chatSt = { sid: null, lang: 'auto', msgs: [] }; } return chatSt; }
+function chatSave() { var s = chatState(); s.t = Date.now(); s.msgs = s.msgs.slice(-40); put(CHAT_KEY, s); }
+function chatOpen(text) {
+  var C = UI.chat || {}, s = chatState(), ai = !!C.ai;
+  var ov = document.getElementById('v4-chat');
+  if (!ov) { ov = document.createElement('section'); ov.id = 'v4-chat'; ov.className = 'v4-chat'; ov.setAttribute('aria-label', 'Assistant'); document.getElementById('app').appendChild(ov); }
+  ov.innerHTML = '<header><button type="button" class="back press" id="ch-x">' + I.backI + '</button><span class="v4-av">A</span><div><b>' + esc(C.name || 'AVERMONTIS Assistant') + '</b><span>' + (ai ? 'AI assistant \u00B7 answers from our catalogue' : 'Automatic assistant \u00B7 answers from our catalogue') + '</span></div>' +
+    '<select id="ch-lang" aria-label="Language"><option value="auto">Auto</option><option value="en">English</option><option value="hinglish">Hinglish</option><option value="hi">\u0939\u093F\u0902\u0926\u0940</option></select></header>' +
+    '<div class="v4-ch-body" id="ch-body" role="log" aria-live="polite"></div><div class="v4-ch-quick" id="ch-quick"></div>' +
+    '<form id="ch-form" class="v4-ch-form"><input id="ch-in" class="inp" autocomplete="off" maxlength="600" placeholder="Ask about products, routine, orders\u2026" aria-label="Message"><button type="submit" class="icon press" aria-label="Send">' + V4I.send + '</button></form>' +
+    '<p class="v4-ch-note">Not medical advice. Our team is on WhatsApp/email for anything else.</p>';
+  ov.classList.add('on'); document.getElementById('app').classList.add('hide-tabs');
+  if (!sheetOpen) history.pushState({ chat: 1 }, '', location.hash || '#home');
+  var body = $('#ch-body'), quick = $('#ch-quick'), inp = $('#ch-in'), sel = $('#ch-lang'); sel.value = s.lang || 'auto';
+  sel.addEventListener('change', function () { s.lang = sel.value; chatSave(); });
+  function bubble(m) {
+    var d = document.createElement('div'); d.className = 'v4-msg ' + (m.role === 'user' ? 'me' : 'bot');
+    var h = '<p>' + esc(m.text).replace(/\n/g, '<br>') + '</p>';
+    if (m.products && m.products.length) h += '<div class="v4-ch-cards">' + m.products.map(function (p) { return '<div class="v4-ch-card"><button type="button" data-prod="' + esc(p.id) + '"><img src="' + esc(img(p)) + '" alt=""><span><b>' + esc(p.name) + '</b><em>' + inr(p.price) + '</em></span></button>' + (p.in_stock === false ? '' : '<button type="button" class="btn sm" data-chadd="' + esc(p.id) + '">Add to bag</button>') + '</div>'; }).join('') + '</div>';
+    var hs = [];
+    if (m.handoff && m.handoff.whatsapp) hs.push('<a class="v4-chip" href="' + esc(m.handoff.whatsapp) + '">' + V4I.wa + ' WhatsApp us</a>');
+    if (m.handoff && m.handoff.email) hs.push('<a class="v4-chip" href="mailto:' + esc(m.handoff.email) + '">Email ' + esc(m.handoff.email) + '</a>');
+    if (m.map) hs.push('<a class="v4-chip" href="' + esc(m.map) + '">' + I.pin + ' Directions</a>');
+    if (m.order) hs.push('<button type="button" class="v4-chip" data-track="' + esc(m.order) + '">' + I.truck + ' Track ' + esc(m.order) + '</button>');
+    if (hs.length) h += '<div class="v4-ch-hand">' + hs.join('') + '</div>';
+    d.innerHTML = h; body.appendChild(d); body.scrollTop = body.scrollHeight;
+  }
+  var QUICK = ['Suggest for oily skin', 'Morning routine', 'Track my order', 'Shipping & COD', 'Vitamin C serum price', 'Talk to a person'];
+  function chips(l) { quick.innerHTML = (l || []).slice(0, 6).map(function (q) { return '<button type="button" class="v4-q press">' + esc(q) + '</button>'; }).join(''); }
+  function render() { body.innerHTML = ''; if (!s.msgs.length) { bubble({ role: 'bot', text: C.greeting || 'Hi! I\u2019m ' + (C.name || 'the AVERMONTIS assistant') + '. Ask me about products, your routine, an order, shipping or returns \u2014 English, Hinglish ya Hindi.' }); chips(QUICK); } s.msgs.forEach(bubble); }
+  function send(t) {
+    t = String(t || '').trim(); if (!t) return; var um = { role: 'user', text: t }; s.msgs.push(um); bubble(um); chips([]); inp.value = ''; chatSave();
+    var ty = document.createElement('div'); ty.className = 'v4-msg bot typing'; ty.innerHTML = '<p><i></i><i></i><i></i></p>'; body.appendChild(ty); body.scrollTop = body.scrollHeight;
+    api('POST', '/api/chat', { message: t, session_id: s.sid, lang: s.lang === 'auto' ? undefined : s.lang, source: 'app' }).then(function (b) {
+      ty.remove(); s.sid = b.session_id; var r = b.reply || {}; var om = /\b(AVM-?[A-Z0-9]{4,})\b/.exec(r.text || '');
+      var bm = { role: 'bot', text: r.text, products: r.products, handoff: r.handoff, map: r.map, order: r.intent === 'order_status' && om ? om[1] : null }; s.msgs.push(bm); bubble(bm); chips(r.quick); chatSave();
+    }).catch(function (err) { ty.remove(); bubble({ role: 'bot', text: err.message }); });
+  }
+  render();
+  $('#ch-form').addEventListener('submit', function (e) { e.preventDefault(); send(inp.value); });
+  quick.addEventListener('click', function (e) { var b = e.target.closest('.v4-q'); if (b) send(b.textContent); });
+  body.addEventListener('click', function (e) { var a = e.target.closest('[data-chadd]'); if (a) { e.stopPropagation(); loadCatalog().then(function () { addToBag(a.getAttribute('data-chadd'), 1); }); } });
+  $('#ch-x').addEventListener('click', function () { if (history.state && history.state.chat) history.back(); else chatClose(); });
+  if (text) send(text);
+}
+function chatClose() { var ov = document.getElementById('v4-chat'); if (ov) ov.classList.remove('on'); document.getElementById('app').classList.toggle('hide-tabs', current === 'checkout' || current === 'bag'); }
+window.addEventListener('popstate', function () { var ov = document.getElementById('v4-chat'); if (ov && ov.classList.contains('on') && !(history.state && history.state.chat)) chatClose(); });
+/* ---------- AR ---------- */
+var arP = null;
+function loadAR() {
+  if (window.AvmAR) return Promise.resolve(window.AvmAR);
+  if (!arP) arP = new Promise(function (ok, no) {
+    var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = NATIVE ? BASE + '/ar-files/ar.css?v=' + APP_VERSION : '/assets/ar/ar.css?v=' + APP_VERSION; document.head.appendChild(l);
+    var sc = document.createElement('script'); sc.src = NATIVE ? BASE + '/ar-files/ar.js?v=' + APP_VERSION : '/assets/ar/ar.js?v=' + APP_VERSION; sc.onload = function () { if (!window.AvmAR) return no(new Error('AR could not start')); window.AvmAR.configure({ base: NATIVE ? BASE + '/ar-files/' : '/assets/ar/' }); ok(window.AvmAR); }; sc.onerror = function () { arP = null; no(new Error(navigator.onLine ? 'AR could not load. Please try again.' : 'AR needs the internet the first time.')); }; document.head.appendChild(sc);
+  });
+  return arP;
+}
+function arUrl(u) { u = String(u || ''); if (!NATIVE || !u) return u; if (u.indexOf('/assets/ar/') === 0) return BASE + '/ar-files/' + u.slice('/assets/ar/'.length); return BASE + u; }
+function arProducts() { return P.map(function (p) { return { id: p.id, name: p.name, size: p.size, price: p.price, image: absUrl(img(p)), how_to_use: p.how_to_use }; }); }
+function arSceneViewer(httpsUrl, intentUrl, title) {
+  var N = NATIVE_PLUG();
+  if (N && N.sceneViewer) { N.sceneViewer({ url: httpsUrl, title: title || '' }).catch(function (e) { toast((e && e.message) || 'View in your room needs the Google app on this phone.'); }); return; }
+  window.open(intentUrl || httpsUrl, '_blank');
+}
+function saveSelfie(blob) {
+  // the WebView cannot download files: the photo goes into the private skin diary instead
+  var e = { id: 'e' + Date.now(), ts: Date.now(), date: dkey(), blob: blob, note: 'Glow selfie (fun filter)', tags: [], routine: dayDone(log()[dkey()], profile()) };
+  return dbPut(e).then(function () { toast('Saved to your skin diary'); });
+}
+function arViewer(p) {
+  loadAR().then(function (AR) {
+    var ov = document.createElement('div'); ov.className = 'v4-arview' + (document.documentElement.classList.contains('lightapp') ? '' : ' avm-dark');
+    ov.innerHTML = '<header><button type="button" class="back press" data-x>' + I.backI + 'Back</button><b>' + esc(p.name) + '</b></header><div class="v4-arstage"></div><p class="small muted">Drag to turn. \u201CView in your room\u201D opens Google\u2019s AR view to place it on your table at real size.</p>';
+    document.getElementById('app').appendChild(ov);
+    var v = AR.mountViewer($('.v4-arstage', ov), { id: p.id, name: p.name, glb: arUrl(p.ar.model), poster: arUrl(p.ar.poster || ''), arGlb: BASE ? BASE + p.ar.model : location.origin + p.ar.model, loading: 'eager', arLabel: 'View in your room',
+      onSceneViewer: NATIVE ? function (u, intent) { arSceneViewer(u, intent, p.name); } : undefined });
+    function close() { try { v.destroy(); } catch (e) {} ov.remove(); window.removeEventListener('popstate', onPop); }
+    function onPop() { close(); }
+    history.pushState({ arv: 1 }, '', location.hash || '#home'); window.addEventListener('popstate', onPop);
+    $('[data-x]', ov).addEventListener('click', function () { history.back(); });
+  }).catch(function (e) { toast(e.message); });
+}
+var arHandle = null;
+function arOpen(kind) {
+  loadAR().then(function (AR) {
+    var dark = !document.documentElement.classList.contains('lightapp');
+    document.body.classList.toggle('avm-dark', dark);
+    if (kind === 'selfie') arHandle = AR.openSelfie(document.body, { caption: (UI.ar && UI.ar.caption) || 'My AVERMONTIS glow', onSave: NATIVE ? saveSelfie : undefined, onShare: NATIVE ? saveSelfie : undefined });
+    else loadCatalog().then(function () { arHandle = AR.openScan(document.body, { products: arProducts(), onReorder: function (id) { addToBag(id, 1); go('bag'); } }); });
+  }).catch(function (e) { toast(e.message); });
+}
+function arOf(p) { return p && p.ar && p.ar.on !== false && p.ar.model ? p.ar : null; }
+function arSheet(pid) {
+  if (!feat('ar')) return;
+  var A = UI.ar || {}, list = P.filter(arOf);
+  openSheet('<span class="eyebrow">AR &amp; 3D</span><h2 style="margin:6px 0 4px">Try ' + esc(storeName()) + ' around you</h2><p class="small muted" style="margin:0 0 14px">Real AR uses your camera; nothing is recorded or uploaded.</p><div class="list">' +
+    (A.viewer !== false && list.length ? '<button type="button" class="li press" data-ar="viewer"><span class="lic">' + V4I.cube + '</span><span class="lt"><b>View in 3D &amp; in your room</b><span>Spin the bottle, then place it on your table (real AR)</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
+    (A.selfie !== false ? '<button type="button" class="li press" data-ar="selfie"><span class="lic">' + V4I.face + '</span><span class="lt"><b>Glow selfie</b><span>A fun face-tracking frame \u2014 just for fun, it does not analyse your skin</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
+    (A.scan !== false ? '<button type="button" class="li press" data-ar="scan"><span class="lic">' + V4I.scan + '</span><span class="lt"><b>Scan your bottle</b><span>Point at the label: how to use + one-tap reorder (real AR)</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') + '</div>' +
+    (list.length ? '<div id="ar-pick" class="hidden"><div class="sec" style="margin-top:18px"><h2>Pick a product</h2></div><div class="hscroll">' + list.map(function (p) { return '<button type="button" class="v4-arp press" data-arp="' + esc(p.id) + '"><img src="' + esc(img(p.ar.poster || p)) + '" alt=""><b>' + esc(p.name) + '</b></button>'; }).join('') + '</div></div>' : ''));
+  var sb = $('#sheet-body');
+  function viewer(id) { var p = byId(id); if (!p) return; closeSheetQuiet(); arViewer(p); }
+  $$('[data-ar]', sb).forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-ar');
+    if (k === 'viewer') { if (list.length === 1) viewer(list[0].id); else $('#ar-pick').classList.remove('hidden'); return; }
+    closeSheetQuiet(); arOpen(k); }); });
+  $$('[data-arp]', sb).forEach(function (b) { b.addEventListener('click', function () { viewer(b.getAttribute('data-arp')); }); });
+  if (pid) viewer(pid);
+}
+function arHomeHtml() {
+  if (!feat('ar')) return ''; var A = UI.ar || {};
+  return '<div class="sec"><h2>Try it in AR</h2><button type="button" class="link" data-act="ar">All</button></div><div class="v4-artiles">' +
+    (A.viewer !== false ? '<button type="button" class="v4-art press" data-act="ar">' + V4I.cube + '<b>In your room</b><span>3D + AR</span></button>' : '') +
+    (A.selfie !== false ? '<button type="button" class="v4-art press" data-arq="selfie">' + V4I.face + '<b>Glow selfie</b><span>Just for fun</span></button>' : '') +
+    (A.scan !== false ? '<button type="button" class="v4-art press" data-arq="scan">' + V4I.scan + '<b>Scan bottle</b><span>How to use</span></button>' : '') + '</div>';
+}
+/* ---------- Make an offer (bargaining) ---------- */
+function canBargain(p) { return feat('bargain') && UI.bargain && UI.bargain.on && p && p.bargain_on !== false && p.in_stock !== false; }
+function offerSheet(id) {
+  var p = byId(id); if (!p) return;
+  me().then(function (u) {
+    if (!u) { toast('Sign in to make an offer \u2014 your deal is saved to your account.'); authSheet('login'); return; }
+    var st = { id: null, done: false };
+    openSheet('<span class="eyebrow">Make an offer</span><h2 style="margin:6px 0 2px">' + esc(p.name) + '</h2><p class="small muted" style="margin:0 0 10px">Listed at ' + inr(p.price) + '. Name your price \u2014 if we agree you get a one-time coupon for this product.</p><div class="v4-ch-body v4-offer" id="of-body"></div>',
+      '<form id="of-form" class="v4-ch-form" style="width:100%"><input id="of-in" class="inp" inputmode="numeric" maxlength="60" placeholder="Your price, e.g. 499" aria-label="Your offer"><button type="submit" class="icon press" aria-label="Send">' + V4I.send + '</button></form>');
+    var body = $('#of-body');
+    function line(by, text) { var d = document.createElement('div'); d.className = 'v4-msg ' + (by === 'user' ? 'me' : 'bot'); d.innerHTML = '<p>' + esc(text) + '</p>'; body.appendChild(d); body.scrollTop = body.scrollHeight; }
+    function dealBox(c) { var d = document.createElement('div'); d.className = 'v4-deal'; d.innerHTML = '<span class="eyebrow">Your deal</span><b>' + inr(c.price) + '</b><code>' + esc(c.code) + '</code><small>One-time coupon for your account and this product. Valid till ' + new Date(c.expires_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) + '.</small><button type="button" class="btn sm" id="of-use">Add to bag with this deal</button>'; body.appendChild(d); body.scrollTop = body.scrollHeight;
+      $('#of-use').addEventListener('click', function () { localStorage.setItem(COUPON, c.code); addToBag(p.id, 1, true); closeSheet(); go('bag'); toast('Deal applied in your bag'); }); }
+    function call(payload) {
+      return api('POST', '/api/bargain', payload).then(function (b) { st.id = b.bargain.id; if (b.message) line('bot', b.message); if (b.bargain.coupon && b.bargain.coupon.code) { dealBox({ code: b.bargain.coupon.code, price: b.bargain.coupon.price || b.bargain.agreed_price, expires_at: b.bargain.coupon.expires_at }); st.done = true; } else if (b.done) st.done = true;
+        if (st.done) $('#of-form').classList.add('hidden');
+        var oa = $('.v4-accept', body); if (oa) oa.remove();
+        if (!st.done && b.bargain.status === 'open' && b.bargain.counter) { var ac = document.createElement('button'); ac.type = 'button'; ac.className = 'v4-q press v4-accept'; ac.style.alignSelf = 'flex-start'; ac.textContent = 'Accept ' + inr(b.bargain.counter); body.appendChild(ac); body.scrollTop = body.scrollHeight;
+          ac.addEventListener('click', function () { ac.remove(); line('user', 'Deal at ' + inr(b.bargain.counter)); call({ bargain_id: st.id, product_id: p.id, offer: b.bargain.counter }); }); }
+      }).catch(function (e) { line('bot', e.message); });
+    }
+    call({ product_id: p.id, lang: 'en' });
+    $('#of-form').addEventListener('submit', function (e) { e.preventDefault(); var v = $('#of-in').value.trim(); if (!v || st.done) return; line('user', /^\d+$/.test(v) ? inr(+v) : v); $('#of-in').value = ''; call({ bargain_id: st.id, product_id: p.id, message: v }); });
+  });
+}
+function productExtras(p) {
+  var h = '';
+  if (feat('ar') && (!UI.ar || UI.ar.viewer !== false) && arOf(p)) h += '<button type="button" class="btn ghost sm press" data-arv="' + esc(p.id) + '">' + V4I.cube + ' View in 3D / your room</button>';
+  if (canBargain(p)) h += '<button type="button" class="btn ghost sm press" data-offer="' + esc(p.id) + '">' + V4I.tag + ' Make an offer</button>';
+  return h ? '<div class="v4-pextra">' + h + '</div>' : '';
+}
+document.addEventListener('click', function (e) {
+  var t = e.target, el;
+  if (!t || !t.closest) return;
+  if ((el = t.closest('[data-link]'))) { e.preventDefault(); closeSheetQuiet(); openLink(el.getAttribute('data-link')); return; }
+  if ((el = t.closest('[data-arv]'))) { var pv = byId(el.getAttribute('data-arv')); if (pv) { closeSheetQuiet(); arViewer(pv); } return; }
+  if ((el = t.closest('[data-offer]'))) { offerSheet(el.getAttribute('data-offer')); return; }
+  if ((el = t.closest('[data-arq]'))) { arOpen(el.getAttribute('data-arq')); return; }
+}, true);
+
 /* ---------- native shell: back button, status bar, splash, outside links, notification taps ---------- */
 function nativeBoot() {
   document.documentElement.classList.add('native');
   var App = PLUG.App, SB = PLUG.StatusBar, SS = PLUG.SplashScreen, AL = PLUG.AppLauncher;
   try { if (SB) { SB.setStyle({ style: 'DARK' }); SB.setBackgroundColor({ color: '#0B0C0B' }); } } catch (e) {}
+  applyLook();
   setTimeout(function () { try { if (SS) SS.hide({ fadeOutDuration: 250 }); } catch (e) {} }, 350);
   // Android back: close an open sheet first, then go back through the app's screens, then leave the app from Home
   if (App) App.addListener('backButton', function (ev) {
     if (sheetOpen) { closeSheet(); return; }
+    var cov = document.getElementById('v4-chat'); if (cov && cov.classList.contains('on')) { if (history.state && history.state.chat) history.back(); else chatClose(); return; }
+    if (arHandle && arHandle.element && document.body.contains(arHandle.element)) { try { arHandle.close(); } catch (e) {} arHandle = null; return; }
+    if (document.querySelector('.v4-arview')) { history.back(); return; }
     var qb = document.getElementById('quiz') && document.getElementById('q-back'); if (qb) { qb.click(); return; }   // skin-profile quiz: one question back
     if (current !== 'home') { if (ev && ev.canGoBack) history.back(); else go('home', true); return; }
     App.exitApp();
   });
-  if (App) App.addListener('appStateChange', function (s) { if (s && s.isActive) { scheduleReminders(); if (current === 'home') paintHome(); if (current === 'routine') paintRoutine(); } });
+  if (App) App.addListener('appStateChange', function (s) { if (s && s.isActive) { scheduleReminders(); loadConfig(); loadNotes(); if (current === 'home') paintHome(); if (current === 'routine') paintRoutine(); } });
   // policies, invoices, mail and the website open outside the app (browser / mail app); app screens (#...) stay inside
   document.addEventListener('click', function (e) {
     var el = e.target && e.target.closest ? e.target.closest('a[href]') : null; if (!el) return;
@@ -1009,7 +1354,7 @@ function nativeBoot() {
   }, true);
   if (LN) {
     try { LN.createChannel({ id: 'ritual', name: 'Ritual reminders', description: 'Morning and evening skincare ritual reminders', importance: 4, visibility: 1, lights: true, lightColor: '#C9A96E', vibration: true }).catch(function () {}); } catch (e) {}
-    LN.addListener('localNotificationActionPerformed', function (a) { var g = a && a.notification && a.notification.extra && a.notification.extra.go; go(g || 'routine'); });
+    LN.addListener('localNotificationActionPerformed', function (a) { var x = a && a.notification && a.notification.extra || {}; go(x.go || 'routine'); if (x.notes) loadNotes().then(notesSheet); });
   }
 }
 
@@ -1019,12 +1364,12 @@ function boot() {
   $('#cam').addEventListener('change', function () { var f = this.files && this.files[0]; this.value = ''; if (!f) return; shrink(f).then(newEntrySheet).catch(function (err) { toast(err.message); }); });
   $$('#tabbar button').forEach(function (b) { b.addEventListener('click', function () { if (current === b.getAttribute('data-go')) { var v = $('#v-' + current); v.scrollTo({ top: 0, behavior: 'smooth' }); } }); });
   var orig = show; show = function (n) { orig(n); leaveBag(); if (n === 'bag') { /* paybar added by paintBag */ } };
-  loadCatalog(); me(); scheduleReminders();
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { scheduleReminders(); if (current === 'home') paintHome(); if (current === 'routine') paintRoutine(); } });
+  applyLook(); loadCatalog(); me(); scheduleReminders(); loadConfig();
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { scheduleReminders(); loadConfig(); loadNotes(); if (current === 'home') paintHome(); if (current === 'routine') paintRoutine(); } });
   window.addEventListener('storage', function (e) { if (e.key === CART) paintBadges(); });
   var start = (location.hash || '#home').slice(1).split('/')[0];
   var deep = new URLSearchParams(location.search).get('product');
-  if (!get(K.seen, 0) || !profile()) { onboarding(); show('home'); }
+  if (!PREVIEW && (!get(K.seen, 0) || !profile())) { onboarding(); show('home'); }
   else { show(VIEWS.indexOf(start) >= 0 ? start : 'home'); }
   if (deep) loadCatalog().then(function () { productSheet(deep); });
   if (NATIVE) nativeBoot();

@@ -50,3 +50,11 @@ accept the update. No keystore is included here.
 - The app reads the owner's live look (colours, fonts, light/dark, home order, banners, store name, features) from `/api/config` at launch and on resume, caches it, and falls back to the built-in look offline.
 - AR files load from the live site (`/assets/ar/`, served with CORS) so the APK stays small; the camera features need the CAMERA permission the app already has.
 - Build: `AVM_SITE=../store/site python3 tools/bundle_web.py && npx cap sync android && cd android && ./gradlew assembleRelease bundleRelease` (signing properties are read from a file OUTSIDE this tree, see app/build.gradle).
+
+## v5.0.0 (versionCode 5)
+- Same package and signing key; installs over v1-v4 as an update.
+- Owner sign-in from the normal sign-in sheet: username `admin` + the existing owner password (optional PIN). The app gets a
+  one-time 2-minute hand-off code (never a bearer token) and opens `/admin/handoff` on the live site inside the app; the
+  admin cookie lives only in the WebView's cookie jar for `avermontis.sites.tab.bot` (`server.allowNavigation`).
+- The app applies the full published design (`UI.app_css` from `/api/config`): colours, dark/auto, fonts (self-hosted,
+  incl. Devanagari), density, card/button style, bottom-bar items, so future look changes need no new APK.

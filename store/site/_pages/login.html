@@ -54,7 +54,7 @@
 </div>
 <main id="main">
 <div class="wrap auth-wrap"><form class="auth-card" id="login-form" novalidate><span class="eyebrow">Welcome back</span><h1>Sign in</h1><p class="muted small">See your orders, invoices and wishlist.</p>
-<div class="field"><label for="login-email">Email</label><input id="login-email" name="email" type="email" autocomplete="email" inputmode="email" maxlength="254"><p class="err" id="login-form-err-email"></p></div>
+<div class="field"><label for="login-email">Email or username</label><input id="login-email" name="email" type="text" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" maxlength="254"><p class="err" id="login-form-err-email"></p></div>
 <div class="field"><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" data-pw><p class="err" id="login-form-err-password"></p></div>
 <div class="auth-row"><label class="showpw small"><input type="checkbox" data-showpw> Show password</label><a class="small" href="/forgot">Forgot password?</a></div>
 <div class="form-alert hidden" role="alert"></div><button class="btn block" type="submit">Sign in</button>
@@ -91,7 +91,7 @@
  <a href="/account" data-tab="account"><svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>Account</span></a>
 </nav>
 <script src="/products.js"></script>
-<script src="/assets/app.js"></script>
+<script src="/assets/app.js?v=5.0.0"></script>
 <script src="/assets/pwa.js"></script>
 </body>
 </html>

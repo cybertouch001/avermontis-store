@@ -58,8 +58,8 @@ test('website stays the website; only the installed app\'s old start URL is sent
 
 test('service worker: precaches the app shell, new cache version, reminder taps open the routine', () => {
   const sw = read('sw.js');
-  assert.match(sw, /VERSION = 'avm-v6/);   // v4 release bumps the cache so phones drop the old shell
-  for (const u of ['/app', '/assets/m/app.css?v=4.0.0', '/assets/m/app.js?v=4.0.0']) assert.ok(sw.includes("'" + u + "'"), 'precache ' + u);
+  assert.match(sw, /VERSION = 'avm-v7/);   // v5 release bumps the cache so phones drop the old shell
+  for (const u of ['/app', '/assets/m/app.css?v=5.0.0', '/assets/m/app.js?v=5.0.0']) assert.ok(sw.includes("'" + u + "'"), 'precache ' + u);
   assert.ok(sw.includes("addEventListener('notificationclick'") && sw.includes('/app#routine'));
 });
 

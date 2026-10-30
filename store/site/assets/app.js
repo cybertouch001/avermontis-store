@@ -162,7 +162,7 @@ function header(){
 function config(){
   api('GET', '/api/config').then(function(b){
     var c = b.config; SUPPORT = c.support_email || SUPPORT;
-    var ab = $('#announce-text'); if (ab && c.announcement) ab.textContent = c.announcement;
+    var ab = $('#announce-text'); if (ab && c.announcement && !(c.ui && c.ui.style && c.ui.style.announce_text)) ab.textContent = c.announcement;
     if (c.whatsapp_number && /^\d{10,13}$/.test(c.whatsapp_number)) {
       var a = document.createElement('a'); a.className = 'wa-float'; a.href = 'https://wa.me/' + c.whatsapp_number + '?text=' + encodeURIComponent('Hi Avermontis, I have a question'); a.target = '_blank'; a.rel = 'noopener';
       a.setAttribute('aria-label', 'Chat with us on WhatsApp'); a.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.6-.3z"/></svg>';
@@ -470,7 +470,20 @@ function renderLogin(){
   var f = $('#login-form'); if (!f) return;
   me().then(function(u){ if (u) location.replace(nextUrl()); });
   var s = $('#to-signup'); if (s && qs('next')) s.href = '/signup?next=' + encodeURIComponent(qs('next'));
-  wireForm(f, {email: R.email, password: function(v){ return v ? '' : 'Enter your password.'; }}, function(){ return api('POST', '/api/auth/login', {email: f.email.value.trim(), password: f.password.value}); }, function(){ location.href = nextUrl(); });
+  // v5: the owner signs in here too, with username "admin" and the owner password (then the owner PIN, if it is on)
+  wireForm(f, {email: function(v){ return /^admin$/i.test(String(v).trim()) ? '' : R.email(v); }, password: function(v){ return v ? '' : 'Enter your password.'; }}, function(){ return api('POST', '/api/auth/login', {email: f.email.value.trim(), password: f.password.value}); }, function(r){
+    if (r && r.step === 'pin') return ownerPin(f, r.challenge);
+    location.href = r && r.admin ? (r.redirect || '/admin') : nextUrl(); });
+}
+function ownerPin(f, challenge){
+  var card = f.closest('.auth-card') || f;
+  card.innerHTML = '<span class="eyebrow">Owner sign in</span><h1>Enter your PIN</h1><p class="muted small">Second step: your 4\u20136 digit owner PIN.</p>' +
+    '<div class="field"><label for="owner-pin">Owner PIN</label><input id="owner-pin" name="pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><p class="err" id="pin-err"></p></div>' +
+    '<button class="btn block" type="button" id="pin-go">Continue</button>';
+  var inp = $('#owner-pin'), go = $('#pin-go'); inp.focus();
+  function send(){ var v = inp.value.trim(); if (!/^\d{4,6}$/.test(v)) { $('#pin-err').textContent = 'Enter 4 to 6 digits.'; return; } go.disabled = true;
+    api('POST', '/api/auth/admin-pin', {challenge: challenge, pin: v}).then(function(r){ location.href = r.redirect || '/admin'; }, function(err){ go.disabled = false; $('#pin-err').textContent = err.message; if (/again\.$/.test(err.message) && /sign in again/i.test(err.message)) setTimeout(function(){ location.reload(); }, 1500); }); }
+  go.addEventListener('click', send); inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); send(); } });
 }
 function renderSignup(){
   var f = $('#signup-form'); if (!f) return;

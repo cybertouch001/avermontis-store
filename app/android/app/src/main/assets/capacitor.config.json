@@ -10,7 +10,10 @@
 	},
 	"server": {
 		"androidScheme": "https",
-		"hostname": "localhost"
+		"hostname": "localhost",
+		"allowNavigation": [
+			"avermontis.sites.tab.bot"
+		]
 	},
 	"plugins": {
 		"SplashScreen": {

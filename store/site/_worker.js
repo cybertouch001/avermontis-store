@@ -232,6 +232,7 @@ async function ensureSchema(env) {
       if (!v1) await env.DB.batch(splitSql(MIGRATION_SQL).map((s) => env.DB.prepare(s)));
       await migrateV2(env);       // additive: new tables + columns only
       await migrateV3(env);       // v4: chat, notifications, bargaining (additive)
+      await migrateV5(env);       // v5: design versions, audit log, admin tokens, session last_seen (additive)
     })().catch((e) => { schemaReady = null; throw e; });
   }
   return schemaReady;
@@ -337,6 +338,8 @@ export function validateSignup(b) {
   const f = {};
   if (out.name.length < 2 || out.name.length > 60) f.name = 'Name must be 2–60 characters.';
   else if (/[<>{}\\]/.test(out.name)) f.name = 'Name has characters that are not allowed.';
+  else if (isReservedName(out.name) || isReservedName(out.name.replace(/\s+/g, ''))) f.name = 'This name is reserved. Please use your own name.';
+  if (isReservedName(out.email.split('@')[0]) && /^(admin|administrator|owner|root)$/i.test(out.email.split('@')[0])) f.email = f.email || 'Please use your personal email address.';
   if (!/^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/.test(out.email) || out.email.length > 254) f.email = 'Enter a valid email address.';
   if (out.password.length < 8) f.password = 'Password must be at least 8 characters.';
   else if (out.password.length > 128) f.password = 'Password must be at most 128 characters.';
@@ -446,9 +449,15 @@ async function getSession(env, request, kind) {
   const token = (kind === 'customer' && bearerToken(request)) || readCookie(request, cookieName(kind));
   if (!token || token.length > 100 || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
   const id = await sha256hex(token);
-  const s = await env.DB.prepare('SELECT id, kind, user_id, expires_at FROM sessions WHERE id = ? AND kind = ?').bind(id, kind).first();
+  const s = await env.DB.prepare('SELECT * FROM sessions WHERE id = ? AND kind = ?').bind(id, kind).first();
   if (!s || s.expires_at < nowIso()) return null;
-  return s;
+  if (kind === 'admin') {   // v5: an owner session ends after the chosen idle time (30 min by default)
+    const sec = await adminSecurity(env).catch(() => ({ idle_minutes: ADMIN_IDLE_DEFAULT_MIN }));
+    const last = Date.parse(s.last_seen_at || s.created_at), now = Date.now();
+    if (now - last > sec.idle_minutes * 60000) { await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(s.id).run(); return null; }
+    if (now - last > 60000 && 'last_seen_at' in s) await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date(now).toISOString(), s.id).run();
+  }
+  return { id: s.id, kind: s.kind, user_id: s.user_id, expires_at: s.expires_at };
 }
 async function currentUser(env, request) {
   const s = await getSession(env, request, 'customer');
@@ -1701,7 +1710,7 @@ const ROUTES = [
   ['POST', /^\/api\/contact$/, contactForm],
   // customer auth + account (own data only)
   ['POST', /^\/api\/auth\/signup$/, signup],
-  ['POST', /^\/api\/auth\/login$/, login],
+  ['POST', /^\/api\/auth\/login$/, loginV5],
   ['POST', /^\/api\/auth\/logout$/, (r, env) => logout(r, env, 'customer')],
   ['POST', /^\/api\/auth\/forgot$/, forgotPassword],
   ['POST', /^\/api\/auth\/reset$/, resetPassword],
@@ -1716,7 +1725,7 @@ const ROUTES = [
   // owner (admin session required on every route below, checked on the server)
   ['GET', /^\/api\/admin\/setup-status$/, async (r, env) => json(200, { ok: true, setup_open: await adminSetupOpen(env) })],
   ['POST', /^\/api\/admin\/setup$/, adminSetup],
-  ['POST', /^\/api\/admin\/login$/, adminLogin],
+  ['POST', /^\/api\/admin\/login$/, adminLoginV5],
   ['POST', /^\/api\/admin\/logout$/, (r, env) => logout(r, env, 'admin')],
   ['GET', /^\/api\/admin\/me$/, async (r, env) => { await requireAdmin(env, r); return json(200, { ok: true, admin: true }); }],
   ['GET', /^\/api\/admin\/stats$/, adminStatsV2],
@@ -1754,8 +1763,8 @@ const ROUTES = [
   ['POST', /^\/api\/admin\/restore$/, restoreBackup],
   // v4
   ['GET', /^\/api\/admin\/ui$/, adminGetUi],
-  ['PUT', /^\/api\/admin\/ui\/([a-z]+)$/, (r, env, u, m) => adminPutUi(r, env, m[1])],
-  ['DELETE', /^\/api\/admin\/ui\/([a-z]+)$/, (r, env, u, m) => adminResetUi(r, env, m[1])],
+  ['PUT', /^\/api\/admin\/ui\/([a-z]+)$/, (r, env, u, m) => adminPutUiV5(r, env, m[1])],
+  ['DELETE', /^\/api\/admin\/ui\/([a-z]+)$/, (r, env, u, m) => adminResetUiV5(r, env, m[1])],
   ['POST', /^\/api\/admin\/ui-preview$/, adminUiPreview],
   ['GET', /^\/api\/admin\/insights$/, adminInsights],
   ['GET', /^\/api\/admin\/chats$/, adminChats],
@@ -1780,7 +1789,9 @@ async function handleApi(request, env, url, ctx) {
     if (!['GET', 'HEAD'].includes(request.method) && !/\/(signup|login|setup|orders)$/.test(url.pathname)) {
       await rateLimit(env, 'api', clientIp(request), API_LIMIT, API_WINDOW_S);
     }
-    return await route[2](request, env, url, url.pathname.match(route[1]), ctx);
+    const res = await route[2](request, env, url, url.pathname.match(route[1]), ctx);
+    if (!['GET', 'HEAD'].includes(request.method) && res && res.status < 400 && /^\/api\/admin\//.test(url.pathname)) await writeAudit(env, request, url, res.status);
+    return res;
   } catch (e) {
     if (e instanceof HttpError) return fail(e.status, e.code, e.message, e.extra, e.fields);
     console.log(JSON.stringify({ level: 'error', path: url.pathname, method: request.method, error: String(e && e.message || e).slice(0, 200) }));
@@ -1930,13 +1941,24 @@ export const THEME_PRESETS = {
   rose: { label: 'Rose Quartz', primary: '#2E2224', accent: '#C9908A', background: '#FBF3F0', text: '#2E2224' },
   midnight: { label: 'Midnight & Champagne', primary: '#0E1726', accent: '#CDAE79', background: '#F4F2EE', text: '#1C2433' },
   sage: { label: 'Sage & Sand', primary: '#26352C', accent: '#A8B58F', background: '#F3F1EA', text: '#26352C' },
-  pearl: { label: 'Pearl White', primary: '#2B2B2B', accent: '#B89B72', background: '#FFFFFF', text: '#222222' }
+  pearl: { label: 'Pearl White', primary: '#2B2B2B', accent: '#B89B72', background: '#FFFFFF', text: '#222222' },
+  // v5 ready-made themes (a preset may also set fonts, light/dark and corners)
+  classic_gold: { label: 'Classic Gold', primary: '#14110C', accent: '#B8913F', background: '#FAF6EC', text: '#221D14', heading_font: 'playfair', body_font: 'system', site_mode: 'light', app_mode: 'dark', radius: 'sharp' },
+  fresh_green: { label: 'Fresh Green', primary: '#1F5E3B', accent: '#3E9B5F', background: '#F4FAF5', text: '#17301F', heading_font: 'montserrat', body_font: 'poppins', site_mode: 'light', app_mode: 'light', radius: 'round' },
+  minimal_white: { label: 'Minimal White', primary: '#111111', accent: '#555555', background: '#FFFFFF', text: '#111111', heading_font: 'montserrat', body_font: 'system', site_mode: 'light', app_mode: 'light', radius: 'soft' },
+  dark_luxe: { label: 'Dark Luxe', primary: '#0A0A0C', accent: '#D4AF6A', background: '#F3EEE4', text: '#1A1814', heading_font: 'dmserif', body_font: 'montserrat', site_mode: 'dark', app_mode: 'dark', radius: 'sharp' },
+  rose_blush: { label: 'Rose', primary: '#4A2530', accent: '#C76B7E', background: '#FFF5F6', text: '#3A1F27', heading_font: 'lora', body_font: 'poppins', site_mode: 'light', app_mode: 'light', radius: 'round' },
+  desi_hindi: { label: 'Saffron (Hindi-ready)', primary: '#3B1F0E', accent: '#E07B24', background: '#FFF8EF', text: '#2B190C', heading_font: 'rozha', body_font: 'hind', site_mode: 'light', app_mode: 'light', radius: 'soft' }
 };
-export const FONTS = { heading: ['cormorant', 'playfair', 'georgia', 'system'], body: ['system', 'poppins', 'georgia'] };
+export const FONTS = { heading: ['cormorant', 'playfair', 'georgia', 'system', 'poppins', 'montserrat', 'lora', 'dmserif', 'hind', 'mukta', 'noto', 'rozha'], body: ['system', 'poppins', 'georgia', 'montserrat', 'lora', 'hind', 'mukta', 'noto'] };
 export const APP_ICONS = ['avr', 'avr_gold', 'avr_green', 'classic'];
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 export const UI_DEFAULTS = {
-  theme: { preset: 'obsidian', primary: '#0B0C0B', accent: '#C6A16A', background: '#F5F0E7', text: '#252522', site_mode: 'light', app_mode: 'dark', heading_font: 'cormorant', body_font: 'system', radius: 'sharp' },
+  theme: { preset: 'obsidian', primary: '#0B0C0B', accent: '#C6A16A', background: '#F5F0E7', text: '#252522', site_mode: 'light', app_mode: 'dark', heading_font: 'cormorant', body_font: 'system', radius: 'sharp',
+    secondary: '', surface: '', button_bg: '', button_text: '', link: '', header_bg: '', header_text: '', footer_bg: '', footer_text: '', success: '', error: '',
+    dark_background: '', dark_surface: '', dark_text: '', dark_accent: '', font_scale: 100, heading_weight: '', body_weight: '' },
+  style: { grid_mobile: 2, grid_desktop: 4, app_grid: 2, card_radius: null, card_shadow: 'none', card_border: true, button_shape: 'default', header_layout: 'left', density: 'comfortable',
+    animations: true, announce_text: '', announce_bg: '', announce_fg: '', bottom_nav: ['home', 'routine', 'diary', 'shop', 'me'], custom_css: '' },
   layout: { home_web: HOME_WEB_SECTIONS.map((id) => ({ id, on: true })), home_app: HOME_APP_SECTIONS.map((id) => ({ id, on: true })) },
   brand: { store_name: 'AVERMONTIS', tagline: '', logo_url: '', favicon_url: '', app_icon: 'avr' },
   hero: { eyebrow: '', title: '', subtitle: '', cta_text: '', cta_link: '', image: '' },
@@ -2036,7 +2058,7 @@ export function siteThemeCss(ui) {
     css += 'body.home main#main{display:flex;flex-direction:column}';
     lay.forEach((x, i) => { css += `body.home [data-sec="${x.id}"]{order:${i + 1}${x.on ? '' : ';display:none!important'}}`; });
   }
-  return css;
+  return css + siteV5Css(ui);
 }
 const safeLink = (u) => { u = String(u || '').trim(); return /^(\/(?!\/)[^\s]*|https:\/\/[^\s]+)$/.test(u) ? u : ''; };
 const safeImg = (u) => { u = String(u || '').trim(); return /^(\/(media|img|assets)\/[A-Za-z0-9_./-]+)$/.test(u) ? u : ''; };
@@ -2051,7 +2073,8 @@ export function publicUi(ui) {
       open_now: openNow(loc.hours) } : null,
     delivery: { mode: ui.delivery.mode, message: ui.delivery.message },
     features: ui.features, chat: { name: ui.chat.name, greeting: ui.chat.greeting, ai: false },
-    ar: ui.ar, bargain: { on: !!(ui.bargain.on && ui.features.bargain) }
+    ar: ui.ar, bargain: { on: !!(ui.bargain.on && ui.features.bargain) },
+    style: ui.style, app_css: appThemeCss(ui)
   };
 }
 export function openNow(hours, now = Date.now()) {
@@ -2119,8 +2142,12 @@ export function validateUi(section, b, cur) {
     v = { ...cur };
     if (b.preset !== undefined) { if (!THEME_PRESETS[b.preset] && b.preset !== 'custom') f.preset = 'Unknown preset.'; else v.preset = b.preset; }
     for (const k of ['primary', 'accent', 'background', 'text']) if (b[k] !== undefined) { if (!HEX.test(str(b[k]))) f[k] = 'Use a colour like #C6A16A.'; else v[k] = str(b[k]).toUpperCase(); }
-    if (b.site_mode !== undefined) { if (!['light', 'dark'].includes(b.site_mode)) f.site_mode = 'Light or dark.'; else v.site_mode = b.site_mode; }
-    if (b.app_mode !== undefined) { if (!['light', 'dark'].includes(b.app_mode)) f.app_mode = 'Light or dark.'; else v.app_mode = b.app_mode; }
+    if (b.site_mode !== undefined) { if (!['light', 'dark', 'auto'].includes(b.site_mode)) f.site_mode = 'Light, dark or auto.'; else v.site_mode = b.site_mode; }
+    if (b.app_mode !== undefined) { if (!['light', 'dark', 'auto'].includes(b.app_mode)) f.app_mode = 'Light, dark or auto.'; else v.app_mode = b.app_mode; }
+    // v5: optional colours ('' = worked out from the four main colours), font size + weights
+    for (const k of OPT_COLOURS) if (b[k] !== undefined) { const x = str(b[k]); if (x && !HEX.test(x)) f[k] = 'Use a colour like #C6A16A (or leave empty for automatic).'; else v[k] = x.toUpperCase(); }
+    if (b.font_scale !== undefined) { const n = Number(b.font_scale); if (!Number.isInteger(n) || n < 85 || n > 130) f.font_scale = 'Text size 85-130%.'; else v.font_scale = n; }
+    for (const k of ['heading_weight', 'body_weight']) if (b[k] !== undefined) { const n = b[k] === '' || b[k] === null ? '' : Number(b[k]); if (n !== '' && ![300, 400, 500, 600, 700].includes(n)) f[k] = 'Pick 300-700.'; else v[k] = n; }
     if (b.heading_font !== undefined) { if (!FONTS.heading.includes(b.heading_font)) f.heading_font = 'Pick a font from the list.'; else v.heading_font = b.heading_font; }
     if (b.body_font !== undefined) { if (!FONTS.body.includes(b.body_font)) f.body_font = 'Pick a font from the list.'; else v.body_font = b.body_font; }
     if (b.radius !== undefined) { if (!['sharp', 'soft', 'round'].includes(b.radius)) f.radius = 'Sharp, soft or round.'; else v.radius = b.radius; }
@@ -2248,7 +2275,7 @@ async function adminResetUi(request, env, section) {
 }
 
 // ---------- pages: the live look is applied on the server, so there is no flash of the old colours ----------
-const LIVE_V = '4.0.1';
+const LIVE_V = '5.0.0';
 export function personalizePage(html, ui, cfg, path) {
   const css = siteThemeCss(ui);
   const pub = publicUi(ui);
@@ -2258,6 +2285,8 @@ export function personalizePage(html, ui, cfg, path) {
     '<script id="avm-cfg" type="application/json">' + JSON.stringify({ ui: pub, whatsapp: cfg.whatsapp_number || '', email: cfg.support_email || '', page: path }).replace(/</g, '\\u003c') + '</script>';
   out = out.replace('</head>', head + '</head>');
   if (!/assets\/live\.js/.test(out)) { out = out.replace('</head>', '<link rel="stylesheet" href="/assets/live.css?v=' + LIVE_V + '"></head>'); out = out.replace('</body>', '<script src="/assets/live.js?v=' + LIVE_V + '" defer></script></body>'); }
+  if (ui.style && ui.style.announce_text) out = out.replace(/(<span id="announce-text">)[\s\S]*?(<\/span>)/, `$1${escHtml(ui.style.announce_text)}$2`);
+  if (ui.style && ui.style.header_layout === 'center') out = out.replace('<header class="site-header">', '<header class="site-header hdr-center">');
   if (b.favicon_url && safeImg(b.favicon_url)) out = out.replace(/<link rel="icon" href="[^"]*"[^>]*>/, `<link rel="icon" href="${escHtml(b.favicon_url)}">`);
   // logo / store name in the header
   if (b.logo_url && safeImg(b.logo_url)) out = out.replace(/(<a class="logo"[^>]*>)AVER<span>MONTIS<\/span>(<\/a>)/g, `$1<img class="logo-img" src="${escHtml(b.logo_url)}" alt="${escHtml(b.store_name)}" height="34">$2`);
@@ -2944,3 +2973,656 @@ async function manifestV4(request, env) {
   } catch { /* the static manifest */ }
   return new Response(JSON.stringify(m), { status: 200, headers: { 'Content-Type': 'application/manifest+json; charset=utf-8', 'Cache-Control': 'no-cache', ...SEC_HEADERS } });
 }
+
+
+// =====================================================================================================================
+// v5 (Oct 2026): the owner signs in from the NORMAL login (username "admin" + the same owner password, same hash),
+// admin security (lockout, optional PIN, idle timeout, sign out everywhere, owner sign-in history), a full design
+// studio (every colour + dark palette, self-hosted fonts incl. Hindi, presets + saved themes, layout/cards/buttons/
+// header/bottom bar/announcement/custom CSS, draft -> publish, version history, undo, reset, export/import) and an
+// audit log of every owner change. Additive only: new tables + one new column. Nothing existing is dropped.
+// =====================================================================================================================
+export const MIGRATION_5_SQL = `-- 0005_v5.sql : design versions, audit log, admin PIN challenges + one-time app handoff codes
+CREATE TABLE IF NOT EXISTS ui_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, ip TEXT);
+CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, area TEXT, summary TEXT, detail TEXT, ip TEXT, device TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log (created_at DESC);
+CREATE TABLE IF NOT EXISTS admin_tokens (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('pin','handoff')), tries INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, ip TEXT, created_at TEXT NOT NULL);
+`;
+async function migrateV5(env) {
+  const have = await env.DB.prepare('SELECT version FROM schema_migrations WHERE version = 5').first();
+  if (have) return;
+  const stmts = splitSql(MIGRATION_5_SQL).map((q) => env.DB.prepare(q));
+  const cols = (await env.DB.prepare('PRAGMA table_info(sessions)').all()).results.map((c) => c.name);
+  if (!cols.includes('last_seen_at')) stmts.push(env.DB.prepare('ALTER TABLE sessions ADD COLUMN last_seen_at TEXT'));
+  stmts.push(env.DB.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (5, datetime('now'))"));
+  await env.DB.batch(stmts);
+}
+
+// ---------- reserved names (nobody can sign up as "admin" or a look-alike) ----------
+const LOOKALIKE = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', l: 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '8': 'b', '9': 'g',
+  '\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0440': 'p', '\u0441': 'c', '\u0445': 'x', '\u0456': 'i', '\u0410': 'a', '\u0415': 'e', '\u041E': 'o', '\u0406': 'i', '\u043C': 'm', '\u041C': 'm', '\u043D': 'h', '\u0442': 't' };
+export function normaliseHandle(s) {
+  let t = String(s || '').normalize('NFKC').toLowerCase().replace(/[\u0300-\u036f\u200b-\u200d\ufeff]/g, '');
+  t = [...t].map((c) => LOOKALIKE[c] || c).join('');
+  return t.replace(/[^a-z]/g, '');
+}
+const RESERVED = ['admin', 'administrator', 'admins', 'adminuser', 'theadmin', 'siteadmin', 'superadmin', 'sysadmin', 'root', 'owner', 'storeowner', 'superuser', 'moderator', 'avermontis', 'avermontisadmin', 'support', 'staff'].map(normaliseHandle);
+export function isReservedName(s) {
+  const raw = String(s || '');
+  if (raw.replace(/[\d\s._-]+$/, '') !== raw && isReservedName(raw.replace(/[\d\s._-]+$/, ''))) return true;   // "admin99", "admin_1"
+  const n = normaliseHandle(s);
+  if (!n) return false;
+  return RESERVED.includes(n) || /^(the)?(site|store|shop|super|sys)?adm[il]n(istrator)?\d*$/.test(n) || /^ad+m+i+n+$/.test(n);
+}
+// the owner's username on the normal login form: "admin" in any letter case, nothing else
+export function isAdminIdentifier(v) { return typeof v === 'string' && v.trim().toLowerCase() === 'admin'; }
+
+// ---------- owner sign-in: one path for the normal login, the app and the old /admin page ----------
+const ADMIN_FAIL_LIMIT = 5, ADMIN_LOCK_S = 15 * 60;            // 5 wrong tries -> locked for 15 minutes (per device/network)
+const ADMIN_FAIL_GLOBAL = 30;                                  // 30 wrong tries from anywhere in 15 minutes -> owner login paused
+const ADMIN_IDLE_DEFAULT_MIN = 30, ADMIN_IDLE_CHOICES = [15, 30, 60, 120];
+const GENERIC_LOGIN_ERROR = 'Username/email or password is incorrect.';
+async function settingGet(env, key) { const r = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first(); return r ? r.value : null; }
+async function settingPut(env, key, value) {
+  await env.DB.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').bind(key, value, nowIso()).run();
+}
+async function adminSecurity(env) {
+  const raw = jparse(await settingGet(env, 'admin_security'), null) || {};
+  const idle = ADMIN_IDLE_CHOICES.includes(raw.idle_minutes) ? raw.idle_minutes : ADMIN_IDLE_DEFAULT_MIN;
+  return { pin_enabled: !!(raw.pin_enabled && raw.pin_hash), pin_hash: raw.pin_hash || '', idle_minutes: idle };
+}
+async function failCount(env, key) {
+  const now = Math.floor(Date.now() / 1000);
+  const r = await env.DB.prepare('SELECT count, reset_at FROM rate_limits WHERE key = ?').bind(key).first();
+  return r && r.reset_at > now ? { count: r.count, reset_at: r.reset_at } : { count: 0, reset_at: 0 };
+}
+async function adminLockCheck(env, request) {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [key, lim] of [['adminfail:' + clientIp(request), ADMIN_FAIL_LIMIT], ['adminfail:*', ADMIN_FAIL_GLOBAL]]) {
+    const f = await failCount(env, key);
+    if (f.count >= lim) {
+      const mins = Math.max(1, Math.ceil((f.reset_at - now) / 60));
+      throw new HttpError(429, 'locked', `Too many wrong attempts. Sign-in is locked for ${mins} minute${mins === 1 ? '' : 's'}. Please try again later.`, { 'Retry-After': String(Math.max(1, f.reset_at - now)) });
+    }
+  }
+}
+async function adminFail(env, request, reason) {
+  const now = Math.floor(Date.now() / 1000);
+  for (const key of ['adminfail:' + clientIp(request), 'adminfail:*']) {
+    const f = await failCount(env, key);
+    if (f.count === 0) await env.DB.prepare('INSERT INTO rate_limits (key, count, reset_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count = 1, reset_at = excluded.reset_at').bind(key, now + ADMIN_LOCK_S).run();
+    else await env.DB.prepare('UPDATE rate_limits SET count = count + 1, reset_at = ? WHERE key = ?').bind(f.count + 1 >= (key.endsWith('*') ? ADMIN_FAIL_GLOBAL : ADMIN_FAIL_LIMIT) ? now + ADMIN_LOCK_S : f.reset_at, key).run();
+  }
+  await logAttempt(env, request, { email: 'admin', kind: 'admin', event: 'admin_login', success: false, reason });
+}
+async function adminClear(env, request) { await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind('adminfail:' + clientIp(request)).run(); }
+async function newAdminToken(env, request, kind, ttlS) {
+  const token = b64u(crypto.getRandomValues(new Uint8Array(24)));
+  const t = Date.now();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM admin_tokens WHERE expires_at < ?').bind(new Date(t).toISOString()),
+    env.DB.prepare('INSERT INTO admin_tokens (id, kind, expires_at, ip, created_at) VALUES (?,?,?,?,?)').bind(await sha256hex(token), kind, new Date(t + ttlS * 1000).toISOString(), clientIp(request), new Date(t).toISOString())
+  ]);
+  return token;
+}
+async function takeAdminToken(env, kind, token) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
+  const id = await sha256hex(token);
+  const row = await env.DB.prepare('SELECT id, tries, used, expires_at FROM admin_tokens WHERE id = ? AND kind = ?').bind(id, kind).first();
+  if (!row || row.used || row.expires_at < nowIso()) return null;
+  return row;
+}
+// the step after a correct password (and PIN): the website gets the HttpOnly owner cookie; the installed app gets a
+// one-time code (2 minutes) that its WebView swaps for that same cookie on the site's own /admin/handoff page.
+// The app never holds an owner token, and a customer bearer token never opens anything owner-only.
+async function adminGrant(env, request) {
+  await adminClear(env, request);
+  await logAttempt(env, request, { email: 'admin', kind: 'admin', event: 'admin_login', success: true });
+  if (isAppRequest(request)) {
+    const code = await newAdminToken(env, request, 'handoff', 120);
+    return json(200, { ok: true, admin: true, handoff: code, open: '/admin/handoff#' + code });
+  }
+  const cookie = await createSession(env, request, 'admin', null);
+  return json(200, { ok: true, admin: true, redirect: '/admin' }, { 'Set-Cookie': cookie });
+}
+async function adminPasswordStep(env, request, password) {
+  await adminLockCheck(env, request);
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'").first();
+  if (!row) { await dummyVerify(String(password || 'x')); await adminFail(env, request, 'setup_required'); throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR); }
+  if (typeof password !== 'string' || !password || password.length > 128 || !(await verifyPassword(password, row.value))) {
+    await adminFail(env, request, 'wrong_password');
+    throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR);
+  }
+  const sec = await adminSecurity(env);
+  if (sec.pin_enabled) {
+    const challenge = await newAdminToken(env, request, 'pin', 300);
+    return json(200, { ok: true, step: 'pin', challenge, message: 'Enter your owner PIN.' });
+  }
+  return adminGrant(env, request);
+}
+async function adminPinStep(request, env) {
+  const b = await readJson(request);
+  await adminLockCheck(env, request);
+  const row = await takeAdminToken(env, 'pin', b.challenge);
+  if (!row) throw new HttpError(401, 'pin_expired', 'That sign-in has expired. Please enter your username and password again.');
+  const sec = await adminSecurity(env);
+  const pin = str(b.pin);
+  const ok = /^\d{4,6}$/.test(pin) && sec.pin_hash && await verifyPassword(pin, sec.pin_hash);
+  if (!ok) {
+    await env.DB.prepare('UPDATE admin_tokens SET tries = tries + 1, used = CASE WHEN tries + 1 >= 3 THEN 1 ELSE used END WHERE id = ?').bind(row.id).run();
+    await adminFail(env, request, 'wrong_pin');
+    throw new HttpError(401, 'wrong_pin', row.tries + 1 >= 3 ? 'Wrong PIN. Please sign in again.' : 'Wrong PIN. Please try again.');
+  }
+  await env.DB.prepare('UPDATE admin_tokens SET used = 1 WHERE id = ?').bind(row.id).run();
+  return adminGrant(env, request);
+}
+async function adminHandoff(request, env) {
+  const b = await readJson(request);
+  if (isAppRequest(request)) throw new HttpError(403, 'forbidden', 'Open this on the store website.');
+  const row = await takeAdminToken(env, 'handoff', b.code);
+  if (!row) throw new HttpError(401, 'handoff_expired', 'This sign-in link has expired. Please sign in again from the app.');
+  await env.DB.prepare('UPDATE admin_tokens SET used = 1 WHERE id = ?').bind(row.id).run();
+  const cookie = await createSession(env, request, 'admin', null);
+  return json(200, { ok: true, admin: true, redirect: '/admin?app=1' }, { 'Set-Cookie': cookie });
+}
+// POST /api/auth/login : customers sign in with email + password; the owner with username "admin" + owner password
+async function loginV5(request, env) {
+  const body = await readJson(request);
+  await rateLimit(env, 'auth', clientIp(request), AUTH_LIMIT, AUTH_WINDOW_S);
+  const ident = typeof body.username === 'string' && !body.email ? body.username : body.email;
+  if (isAdminIdentifier(ident)) return adminPasswordStep(env, request, body.password);
+  const { value, fields } = validateLogin({ email: ident, password: body.password });
+  if (fields.email && typeof ident === 'string' && ident.trim() && !ident.includes('@')) fields.email = 'Enter your email address (or the owner username).';
+  assertValid(fields);
+  const u = await env.DB.prepare('SELECT id, email, name, password_hash FROM users WHERE email = ?').bind(value.email).first();
+  let ok = false;
+  if (u) ok = await verifyPassword(value.password, u.password_hash); else await dummyVerify(value.password);
+  if (!ok) {
+    await logAttempt(env, request, { user_id: u ? u.id : null, email: value.email, kind: 'customer', event: 'login', success: false, reason: u ? 'wrong_password' : 'no_account' });
+    throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR);
+  }
+  await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(nowIso(), u.id).run();
+  await logAttempt(env, request, { user_id: u.id, email: u.email, kind: 'customer', event: 'login', success: true });
+  const cookie = await createSession(env, request, 'customer', u.id);
+  return json(200, withAppToken(request, { ok: true, user: { id: u.id, email: u.email, name: u.name } }), { 'Set-Cookie': cookie });
+}
+// the old /admin page (password only) keeps working, with the same lockout + PIN
+async function adminLoginV5(request, env) {
+  const body = await readJson(request);
+  const row = await env.DB.prepare("SELECT 1 AS x FROM settings WHERE key = 'admin_password_hash'").first();
+  if (!row) throw new HttpError(409, 'setup_required', 'The owner password has not been created yet. Open /admin/setup first.');
+  return adminPasswordStep(env, request, body.password);
+}
+
+// ---------- owner: security settings ----------
+function maskIp(ip) { ip = String(ip || ''); if (ip.includes(':')) return ip.split(':').slice(0, 3).join(':') + ':…'; const p = ip.split('.'); return p.length === 4 ? p[0] + '.' + p[1] + '.' + p[2] + '.x' : ip; }
+async function adminGetSecurity(request, env) {
+  const s = await requireAdmin(env, request);
+  const sec = await adminSecurity(env);
+  const sessions = (await env.DB.prepare("SELECT id, created_at, expires_at, last_seen_at, ip, user_agent FROM sessions WHERE kind = 'admin' AND expires_at > ? ORDER BY created_at DESC LIMIT 20").bind(nowIso()).all()).results
+    .map((x) => ({ current: x.id === s.id, signed_in: x.created_at, last_active: x.last_seen_at || x.created_at, device: deviceFromUA(x.user_agent || ''), ip: maskIp(x.ip) }));
+  const logins = (await env.DB.prepare("SELECT success, reason, ip, device, user_agent, created_at FROM login_history WHERE kind = 'admin' ORDER BY id DESC LIMIT 40").all()).results
+    .map((x) => ({ time: x.created_at, success: !!x.success, reason: x.reason || '', device: x.device || deviceFromUA(x.user_agent || ''), ip: maskIp(x.ip) }));
+  const here = await failCount(env, 'adminfail:' + clientIp(request)), all = await failCount(env, 'adminfail:*');
+  return json(200, { ok: true, security: { pin_enabled: sec.pin_enabled, idle_minutes: sec.idle_minutes, idle_choices: ADMIN_IDLE_CHOICES, lock_after: ADMIN_FAIL_LIMIT, lock_minutes: ADMIN_LOCK_S / 60,
+    failed_recently: all.count, username: 'admin' }, sessions, logins });
+}
+async function adminPutSecurity(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request);
+  const sec = await adminSecurity(env);
+  const raw = jparse(await settingGet(env, 'admin_security'), null) || {};
+  const f = {}; const changed = [];
+  const needPw = b.pin_enabled !== undefined || b.pin !== undefined || b.new_password !== undefined;
+  if (needPw) {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'").first();
+    await adminLockCheck(env, request);
+    if (!row || typeof b.current_password !== 'string' || !(await verifyPassword(b.current_password, row.value))) {
+      await adminFail(env, request, 'wrong_password');
+      throw new HttpError(400, 'invalid_input', 'Your current owner password is not correct.', null, { current_password: 'Your current owner password is not correct.' });
+    }
+  }
+  if (b.idle_minutes !== undefined) { const n = Number(b.idle_minutes); if (!ADMIN_IDLE_CHOICES.includes(n)) f.idle_minutes = 'Pick 15, 30, 60 or 120 minutes.'; else if (n !== sec.idle_minutes) { raw.idle_minutes = n; changed.push('auto sign-out ' + n + ' min'); } }
+  if (b.pin_enabled === true) {
+    const pin = str(b.pin);
+    if (!/^\d{4,6}$/.test(pin)) f.pin = 'PIN must be 4 to 6 digits.';
+    else if (/^(\d)\1+$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) f.pin = 'Pick a PIN that is not a simple pattern (like 1111 or 1234).';
+    else { raw.pin_hash = await hashPassword(pin); raw.pin_enabled = true; changed.push('owner PIN on'); }
+  } else if (b.pin_enabled === false && sec.pin_enabled) { raw.pin_enabled = false; raw.pin_hash = ''; changed.push('owner PIN off'); }
+  let newHash = null;
+  if (b.new_password !== undefined) {
+    const p = typeof b.new_password === 'string' ? b.new_password : '';
+    if (p.length < 10 || p.length > 128 || !/[A-Za-z]/.test(p) || !/[0-9]/.test(p)) f.new_password = 'At least 10 characters, with a letter and a number.';
+    else if (p !== b.confirm_password) f.confirm_password = 'The two passwords do not match.';
+    else { newHash = await hashPassword(p); changed.push('owner password changed'); }
+  }
+  assertValid(f);
+  await settingPut(env, 'admin_security', JSON.stringify(raw));
+  if (newHash) {
+    await settingPut(env, 'admin_password_hash', newHash);
+    // a new password signs out every other owner session
+    const cur = await getSession(env, request, 'admin');
+    await env.DB.prepare("DELETE FROM sessions WHERE kind = 'admin' AND id != ?").bind(cur ? cur.id : '').run();
+  }
+  request.__audit = changed.join(', ') || 'no change';
+  return adminGetSecurity(request, env);
+}
+async function adminLogoutAll(request, env) {
+  await requireAdmin(env, request);
+  checkOrigin(request);
+  const r = await env.DB.prepare("DELETE FROM sessions WHERE kind = 'admin'").run();
+  request.__audit = 'signed out of every device';
+  return json(200, { ok: true, signed_out: r.meta ? r.meta.changes : null }, { 'Set-Cookie': setCookie(cookieName('admin'), '', 0) });
+}
+
+// ---------- audit log (every successful owner change, written by handleApi) ----------
+const AUDIT_AREAS = [[/^\/api\/admin\/design/, 'Design'], [/^\/api\/admin\/ui/, 'Customize'], [/^\/api\/admin\/(security|logout-all)/, 'Security'], [/^\/api\/admin\/orders/, 'Orders'],
+  [/^\/api\/admin\/products/, 'Products'], [/^\/api\/admin\/upload/, 'Uploads'], [/^\/api\/admin\/coupons/, 'Coupons'], [/^\/api\/admin\/reviews/, 'Reviews'], [/^\/api\/admin\/(customers|resets)/, 'Customers'],
+  [/^\/api\/admin\/(messages|subscribers)/, 'Messages'], [/^\/api\/admin\/settings/, 'Settings'], [/^\/api\/admin\/(restore|backup)/, 'Backup'], [/^\/api\/admin\/notifications/, 'Notify'],
+  [/^\/api\/admin\/(bargains|chat)/, 'Assistant'], [/^\/api\/admin\/email/, 'Email']];
+async function writeAudit(env, request, url, status) {
+  try {
+    const p = url.pathname; if (!/^\/api\/admin\//.test(p) || /\/(login|setup|handoff|ui-preview|design\/preview|chat-test|email-test)$/.test(p)) return;
+    const area = (AUDIT_AREAS.find((a) => a[0].test(p)) || [null, 'Other'])[1];
+    const verb = { POST: 'created', PUT: 'saved', PATCH: 'updated', DELETE: 'deleted' }[request.method] || request.method;
+    const tail = decodeURIComponent(p.replace(/^\/api\/admin\//, '')).slice(0, 120);
+    const ua = clientUA(request);
+    await env.DB.prepare('INSERT INTO audit_log (action, area, summary, detail, ip, device, created_at) VALUES (?,?,?,?,?,?,?)')
+      .bind(tail + ' ' + verb, area, String(request.__audit || '').slice(0, 500), request.__auditDetail ? JSON.stringify(request.__auditDetail).slice(0, 4000) : null, clientIp(request), deviceFromUA(ua), nowIso()).run();
+    await env.DB.prepare('DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 2000)').run();
+  } catch (e) { /* the audit log never blocks the change itself */ }
+}
+async function adminAudit(request, env, url) {
+  await requireAdmin(env, request);
+  const area = url.searchParams.get('area') || '';
+  const rows = (await (area ? env.DB.prepare('SELECT * FROM audit_log WHERE area = ? ORDER BY id DESC LIMIT 200').bind(area) : env.DB.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200')).all()).results;
+  return json(200, { ok: true, entries: rows.map((r) => ({ id: r.id, time: r.created_at, area: r.area, action: r.action, summary: r.summary || '', detail: jparse(r.detail, null), device: r.device || '' })) });
+}
+
+// ---------- design studio ----------
+export const DESIGN_SECTIONS = ['theme', 'layout', 'style'];
+export const BOTTOM_NAV_ITEMS = ['home', 'routine', 'diary', 'shop', 'me'];
+export const FONT_LABELS = { cormorant: 'Cormorant (elegant serif)', playfair: 'Playfair Display (serif)', georgia: 'Georgia (classic serif)', system: 'Phone default (sans)', poppins: 'Poppins + Hindi', montserrat: 'Montserrat (modern sans)',
+  lora: 'Lora (soft serif)', dmserif: 'DM Serif Display (bold serif)', hind: 'Hind (Hindi + English)', mukta: 'Mukta (Hindi + English)', noto: 'Noto Sans (Hindi + English)', rozha: 'Rozha One (Hindi display)' };
+export const FONT_DEVANAGARI = ['poppins', 'hind', 'mukta', 'noto', 'rozha'];
+const FONT_FILES = {"montserrat":[["Montserrat","400 700","montserrat-lati.woff2","L"]],"lora":[["Lora","400 600","lora-lati.woff2","L"]],"dmserif":[["DM Serif Display","400","dmserif-400-lati.woff2","L"]],"hind":[["Hind","400","hind-400-deva.woff2","D"],["Hind","400","hind-400-lati.woff2","L"],["Hind","600","hind-600-deva.woff2","D"],["Hind","600","hind-600-lati.woff2","L"]],"mukta":[["Mukta","400","mukta-400-deva.woff2","D"],["Mukta","400","mukta-400-lati.woff2","L"],["Mukta","700","mukta-700-deva.woff2","D"],["Mukta","700","mukta-700-lati.woff2","L"]],"rozha":[["Rozha One","400","rozha-400-deva.woff2","D"],["Rozha One","400","rozha-400-lati.woff2","L"]],"poppins":[["Poppins","400","poppins-400.woff2",""],["Poppins","500 700","poppins-600.woff2",""],["Poppins","400","poppinsdeva-400-deva.woff2","D"],["Poppins","600","poppinsdeva-600-deva.woff2","D"]],"playfair":[["Playfair Display","500 700","playfair-600.woff2",""]],"noto":[["Noto Sans","400 600","notosans-lati.woff2","L"],["Noto Sans","400 600","notodeva-deva.woff2","D"]]};
+const LAT_RANGE = 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD';
+const DEV_RANGE = 'U+0900-097F, U+1CD0-1CF4, U+1CF7-1CF9, U+200C-200D, U+20A8, U+20B9, U+20F0, U+25CC, U+A830-A839, U+A8E0-A8FF, U+11B00-11B0A';
+const STACK_V5 = { montserrat: '"Montserrat",system-ui,Arial,sans-serif', lora: '"Lora",Georgia,serif', dmserif: '"DM Serif Display",Georgia,serif', hind: '"Hind",system-ui,Arial,sans-serif',
+  mukta: '"Mukta",system-ui,Arial,sans-serif', noto: '"Noto Sans",system-ui,Arial,sans-serif', rozha: '"Rozha One",Georgia,serif', poppins: '"Poppins",system-ui,-apple-system,Roboto,Arial,sans-serif',
+  cormorant: '"Cormorant","Cormorant Garamond",Georgia,"Times New Roman",serif', playfair: '"Playfair Display",Georgia,serif', georgia: 'Georgia,"Times New Roman",serif', system: 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif' };
+export function fontFaces(key, skip) {
+  return (FONT_FILES[key] || []).filter((f) => !(skip && skip.includes(f[2]))).map((f) => `@font-face{font-family:"${f[0]}";src:url(/assets/fonts/${f[2]}) format("woff2");font-weight:${f[1]};font-display:swap${f[3] === 'L' ? ';unicode-range:' + LAT_RANGE : f[3] === 'D' ? ';unicode-range:' + DEV_RANGE : ''}}`).join('');
+}
+const OPT_COLOURS = ['secondary', 'surface', 'button_bg', 'button_text', 'link', 'header_bg', 'header_text', 'footer_bg', 'footer_text', 'success', 'error', 'dark_background', 'dark_surface', 'dark_text', 'dark_accent'];
+export const STYLE_DEFAULTS = { grid_mobile: 2, grid_desktop: 4, app_grid: 2, card_radius: null, card_shadow: 'none', card_border: true, button_shape: 'default', header_layout: 'left', density: 'comfortable',
+  animations: true, announce_text: '', announce_bg: '', announce_fg: '', bottom_nav: BOTTOM_NAV_ITEMS.slice(), custom_css: '' };
+// CSS the owner types in "Advanced": no way to load outside files, run script or break out of the style tag
+export function sanitizeCss(css) {
+  let c = String(css || '').slice(0, 12000).replace(/\u0000/g, '');
+  c = c.replace(/<\/?\s*style/gi, '').replace(/[<>]/g, '');
+  c = c.replace(/@import[^;]*;?/gi, '').replace(/@charset[^;]*;?/gi, '').replace(/@namespace[^;]*;?/gi, '');
+  c = c.replace(/expression\s*\(/gi, '(').replace(/javascript\s*:/gi, '').replace(/vbscript\s*:/gi, '').replace(/-moz-binding/gi, '').replace(/behavior\s*:/gi, '');
+  c = c.replace(/url\s*\(\s*(['"]?)\s*([^'")]*)\1\s*\)/gi, (m, q, u) => (/^\/(?!\/)[A-Za-z0-9_./-]*$/.test(u) ? `url(${u})` : 'none'));
+  c = c.replace(/\\/g, '');
+  let depth = 0; for (const ch of c) { if (ch === '{') depth++; else if (ch === '}') depth--; if (depth < 0) break; }
+  if (depth !== 0) return { css: '', error: 'Your CSS has unbalanced { } brackets.' };
+  return { css: c.trim(), error: null };
+}
+export function validateStyle(b, cur) {
+  const f = {}, v = { ...STYLE_DEFAULTS, ...(cur || {}) };
+  const pick = (k, list) => { if (b[k] === undefined) return; if (!list.includes(b[k])) f[k] = 'Pick one of: ' + list.join(', ') + '.'; else v[k] = b[k]; };
+  const num = (k, list) => { if (b[k] === undefined) return; const n = Number(b[k]); if (!list.includes(n)) f[k] = 'Pick ' + list.join(', ') + '.'; else v[k] = n; };
+  num('grid_mobile', [1, 2, 3]); num('grid_desktop', [2, 3, 4, 5]); num('app_grid', [1, 2, 3]);
+  if (b.card_radius !== undefined) { if (b.card_radius === null || b.card_radius === '') v.card_radius = null; else { const n = Number(b.card_radius); if (!Number.isInteger(n) || n < 0 || n > 32) f.card_radius = 'Corner radius 0-32 px.'; else v.card_radius = n; } }
+  pick('card_shadow', ['none', 'soft', 'strong']); pick('button_shape', ['default', 'square', 'rounded', 'pill']); pick('header_layout', ['left', 'center']); pick('density', ['comfortable', 'compact']);
+  for (const k of ['card_border', 'animations']) if (b[k] !== undefined) v[k] = b[k] === true || b[k] === 'true' || b[k] === 1;
+  if (b.announce_text !== undefined) v.announce_text = clamp(b.announce_text, 140);
+  for (const k of ['announce_bg', 'announce_fg']) if (b[k] !== undefined) { const x = str(b[k]); if (x && !HEX.test(x)) f[k] = 'Use a colour like #C6A16A.'; else v[k] = x.toUpperCase(); }
+  if (b.bottom_nav !== undefined) {
+    if (!Array.isArray(b.bottom_nav) || b.bottom_nav.some((x) => !BOTTOM_NAV_ITEMS.includes(x)) || new Set(b.bottom_nav).size !== b.bottom_nav.length) f.bottom_nav = 'Unknown bottom bar item.';
+    else if (!b.bottom_nav.includes('home') || !b.bottom_nav.includes('me')) f.bottom_nav = 'Home and Me always stay in the bottom bar.';
+    else if (b.bottom_nav.length < 3) f.bottom_nav = 'Keep at least 3 items.';
+    else v.bottom_nav = b.bottom_nav.slice();
+  }
+  if (b.custom_css !== undefined) { const r = sanitizeCss(b.custom_css); if (r.error) f.custom_css = r.error; else v.custom_css = r.css; }
+  return { value: v, fields: f };
+}
+// warnings never block saving (the one hard rule, text vs background, is checked in validateUi like v4)
+export function designWarnings(t, st) {
+  const w = [];
+  const chk = (a, b, what, min = 4.5) => { if (HEX.test(a || '') && HEX.test(b || '')) { const c = contrast(a, b); if (c < min) w.push({ field: what, ratio: Math.round(c * 10) / 10, message: `${what}: colours are hard to read (contrast ${Math.round(c * 10) / 10}:1, aim for ${min}:1).` }); } };
+  const bg = t.background, tx = t.text;
+  chk(tx, bg, 'Text on background');
+  if (t.button_bg || t.button_text) chk(t.button_text || autoInk(t.button_bg || t.accent), t.button_bg || t.accent, 'Button text', 3);
+  if (t.link) chk(t.link, bg, 'Links', 3);
+  if (t.header_bg) chk(t.header_text || (luminance(t.header_bg) > 0.45 ? '#111111' : '#F5F0E7'), t.header_bg, 'Header');
+  if (t.footer_bg) chk(t.footer_text || (luminance(t.footer_bg) > 0.45 ? '#111111' : '#F5F0E7'), t.footer_bg, 'Footer');
+  if (t.surface) chk(tx, t.surface, 'Text on cards');
+  if (t.dark_background || t.dark_text) chk(t.dark_text || '#F5F0E7', t.dark_background || mixHex(t.primary, '#000000', 0.15), 'Dark mode text');
+  if (st && st.announce_bg) chk(st.announce_fg || '#FFFFFF', st.announce_bg, 'Announcement bar');
+  return w;
+}
+const shade = (h, d) => withLightness(h, (l) => l + d);
+const autoInk = (bg) => (luminance(bg) > 0.45 ? '#16130F' : '#FFFFFF');
+// extra website CSS for v5 settings (appended after the v4 CSS; the default design adds nothing)
+export function siteV5Css(ui) {
+  const t = ui.theme, st = { ...STYLE_DEFAULTS, ...(ui.style || {}) };
+  let css = '';
+  for (const k of [t.heading_font, t.body_font]) if (k && !['cormorant', 'georgia', 'system'].includes(k)) css += fontFaces(k, ['playfair-600.woff2', 'poppins-400.woff2', 'poppins-600.woff2']);
+  if (t.heading_font && STACK_V5[t.heading_font] && !HEADING_STACK[t.heading_font]) css += ':root{--serif:' + STACK_V5[t.heading_font] + '}';
+  if (t.body_font && STACK_V5[t.body_font] && !BODY_STACK[t.body_font]) css += ':root{--sans:' + STACK_V5[t.body_font] + '}';
+  const v = {};
+  if (t.surface) v['--surface'] = t.surface;
+  if (t.secondary) { v['--bg2'] = mixHex(t.background, t.secondary, 0.12); v['--stone'] = t.secondary; v['--surface2'] = mixHex(t.background, t.secondary, 0.2); }
+  if (t.button_bg) { v['--green'] = t.button_bg; v['--green-d'] = shade(t.button_bg, -0.08); }
+  if (t.success) v['--ok'] = t.success;
+  if (t.error) v['--err'] = t.error;
+  if (Object.keys(v).length) css += ':root{' + Object.entries(v).map(([k, x]) => k + ':' + x).join(';') + '}';
+  if (t.button_bg || t.button_text) css += `.btn:not(.ghost):not(.danger){color:${t.button_text || autoInk(t.button_bg || t.accent)}}`;
+  if (t.secondary) css += `.btn.ghost{color:${t.secondary};border-color:${t.secondary}}`;
+  if (t.link) css += `main p a:not(.btn),main li a:not(.btn),.prose a,.note a,.small a:not(.btn){color:${t.link}}`;
+  if (t.header_bg) css += `.site-header,.site-header.scrolled,body.home .site-header,body.home .site-header.scrolled{background:${t.header_bg}}`;
+  if (t.header_bg || t.header_text) { const ink = t.header_text || autoInk(t.header_bg); css += `.site-header,body.home .site-header,.site-header .menu>li>a,.site-header .logo,.site-header .logo span,.site-header .icon-btn,.site-header .menu-btn{color:${ink}}`; }
+  if (t.footer_bg) css += `.site-footer{background:${t.footer_bg}}`;
+  if (t.footer_bg || t.footer_text) css += `.site-footer,.site-footer a,.site-footer h2,.site-footer h3,.site-footer h4{color:${t.footer_text || autoInk(t.footer_bg)}}`;
+  if (Number(t.font_scale) && Number(t.font_scale) !== 100) css += `html{font-size:${Number(t.font_scale)}%}`;
+  if (t.heading_weight) css += `h1,h2,h3,.h1,.h2,.h3,.display{font-weight:${t.heading_weight}}`;
+  if (t.body_weight) css += `body{font-weight:${t.body_weight}}`;
+  // dark mode: "auto" follows the visitor's phone setting
+  if (t.site_mode === 'auto' || (t.site_mode === 'dark' && (t.dark_background || t.dark_surface || t.dark_text || t.dark_accent))) {
+    const dv = siteThemeVars({ ...t, site_mode: 'dark', primary: t.dark_background || t.primary });
+    if (t.dark_surface) { dv['--surface'] = t.dark_surface; dv['--surface2'] = mixHex(t.dark_surface, '#ffffff', 0.05); }
+    if (t.dark_text) { dv['--text'] = t.dark_text; dv['--ink'] = t.dark_text; dv['--ivory'] = t.dark_text; dv['--charcoal'] = t.dark_text; dv['--muted'] = mixHex(t.dark_text, t.dark_background || t.primary, 0.38); }
+    if (t.dark_accent) { dv['--accent'] = t.dark_accent; dv['--gold'] = t.dark_accent; dv['--green'] = t.dark_accent; dv['--green-d'] = shade(t.dark_accent, -0.08); }
+    const body = ':root{' + Object.entries(dv).map(([k, x]) => k + ':' + x).join(';') + '}body{color-scheme:dark}.site-header,.announce{background:var(--bg)}';
+    css += t.site_mode === 'auto' ? '@media (prefers-color-scheme:dark){' + body + '}' : body;
+  }
+  // layout + UI extras
+  if (st.grid_mobile !== 2) css += `@media (max-width:759px){main .grid{grid-template-columns:repeat(${st.grid_mobile},minmax(0,1fr))}}`;
+  if (st.grid_desktop !== 4) css += `@media (min-width:1080px){main .grid{grid-template-columns:repeat(${st.grid_desktop},minmax(0,1fr))}}@media (min-width:760px) and (max-width:1079px){main .grid{grid-template-columns:repeat(${Math.min(st.grid_desktop, 3)},minmax(0,1fr))}}`;
+  if (st.card_radius !== null && st.card_radius !== undefined) css += `main .card,main .card img,.p-card,.product-card,.cat-tile,.avm-banner{border-radius:${st.card_radius}px}main .card{overflow:hidden}`;
+  if (st.card_shadow === 'soft') css += 'main .card{box-shadow:0 6px 22px rgba(0,0,0,.08)!important}';
+  if (st.card_shadow === 'strong') css += 'main .card{box-shadow:0 14px 40px rgba(0,0,0,.18)!important}';
+  if (st.card_border === false) css += 'main .card{border-color:transparent!important}';
+  if (st.button_shape !== 'default') css += `.btn{border-radius:${{ square: '0', rounded: '10px', pill: '999px' }[st.button_shape]}}`;
+  if (st.header_layout === 'center') css += '@media (min-width:980px){.site-header .nav{display:grid;grid-template-columns:1fr auto 1fr;grid-template-areas:"menu logo icons"}.site-header .logo{grid-area:logo;justify-self:center}.site-header .menu-wrap{grid-area:menu;justify-self:start}.site-header .hdr-icons{grid-area:icons;justify-self:end}}@media (max-width:979px){.site-header .logo{position:absolute;left:50%;transform:translateX(-50%)}.site-header .nav{position:relative}}';
+  if (st.density === 'compact') css += 'main section{padding-top:clamp(24px,4vw,48px)!important;padding-bottom:clamp(24px,4vw,48px)!important}main .grid{gap:12px 10px}.field{margin-bottom:10px}';
+  if (st.animations === false) css += '*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.reveal,[data-reveal]{opacity:1!important;transform:none!important}';
+  // the v3 design hides the thin top bar; the owner's own announcement brings it back (above the fixed header on home)
+  if (st.announce_text) css += '.announce{display:block;position:relative;z-index:41}body.home .announce{position:fixed;top:0;left:0;right:0}body.home .site-header{top:33px}';
+  if (st.announce_bg) css += `.announce{background:${st.announce_bg}}`;
+  if (st.announce_bg || st.announce_fg) css += `.announce,.announce a{color:${st.announce_fg || autoInk(st.announce_bg)}}`;
+  if (st.custom_css) css += '\n/* owner custom CSS */\n' + st.custom_css;
+  return css;
+}
+// the whole look of the phone app as one CSS string, made here so a new look never needs a new APK.
+// (the v5 app applies this as is; the v4 app keeps using its own built-in rules from the same theme fields)
+export function appThemeCss(ui) {
+  const t = ui.theme, st = { ...STYLE_DEFAULTS, ...(ui.style || {}) };
+  const ok = [t.primary, t.accent, t.background, t.text].every((x) => HEX.test(x || ''));
+  let css = '';
+  for (const k of [t.heading_font, t.body_font]) if (k && !['cormorant', 'georgia', 'system'].includes(k)) css += fontFaces(k);
+  const vars = (mode, dark) => {
+    const v = {}; if (!ok) return v;
+    const pr = t.primary, ac = t.accent, bg = t.background, tx = t.text;
+    if (mode === 'light') {
+      Object.assign(v, { '--ob': bg, '--ob2': mixHex(bg, pr, 0.035), '--card': t.surface || mixHex(bg, '#FFFFFF', 0.7), '--card2': mixHex(t.surface || bg, pr, 0.06), '--line': rgba(pr, 0.10), '--line2': rgba(pr, 0.2),
+        '--ivory': pr, '--text': tx, '--muted': mixHex(tx, bg, 0.38), '--muted2': mixHex(tx, bg, 0.52), '--gold': mixHex(ac, pr, 0.25), '--gold2': ac, '--goldd': mixHex(ac, pr, 0.45), '--ok': t.success || '#2F6B45', '--err': t.error || '#B3261E' });
+    } else {
+      const base = dark.bg || mixHex(pr, '#000000', 0.15), a2 = dark.accent || ac, fg = dark.text || '#EFE9DE';
+      Object.assign(v, { '--ob': base, '--ob2': mixHex(base, '#FFFFFF', 0.03), '--card': dark.surface || mixHex(base, '#FFFFFF', 0.055), '--card2': mixHex(dark.surface || base, '#FFFFFF', 0.09), '--line': rgba(fg, 0.10), '--line2': rgba(fg, 0.18),
+        '--gold': a2, '--gold2': mixHex(a2, '#FFFFFF', 0.3), '--goldd': mixHex(a2, '#000000', 0.25), '--text': fg, '--ivory': mixHex(fg, '#FFFFFF', 0.4), '--muted': mixHex(fg, base, 0.35), '--muted2': mixHex(fg, base, 0.5) });
+      if (t.success) v['--ok'] = t.success; if (t.error) v['--err'] = t.error;
+    }
+    return v;
+  };
+  const block = (v) => (Object.keys(v).length ? ':root{' + Object.entries(v).map(([k, x]) => k + ':' + x).join(';') + '}' : '');
+  const themed = '.today{background:radial-gradient(120% 90% at 100% 0%,color-mix(in srgb,var(--gold) 25%,transparent),transparent 55%),linear-gradient(160deg,var(--card2),var(--ob2))}.ring>div{background:var(--ob2)}' +
+    '.sk{background:linear-gradient(90deg,var(--card) 0%,var(--card2) 40%,var(--card) 80%);background-size:300% 100%}.sheet,.sheet .sfoot{background:var(--ob2)}.tabbar{background:color-mix(in srgb,var(--ob) 88%,transparent)}html,body{background:var(--ob)}' +
+    '.tile::after{background:linear-gradient(180deg,transparent 20%,color-mix(in srgb,var(--ob) 88%,transparent))}';
+  const light = '.slide h1,.slide .wordmark{color:#F5F0E7}.slide p{color:#D9D2C6}.icon{background:rgba(0,0,0,.04)}.tile::after{background:linear-gradient(180deg,transparent 15%,rgba(255,255,255,.92))}.tile img{opacity:.5}.btn{color:#fff;background:linear-gradient(180deg,var(--gold2),var(--gold))}.sheet,.tabbar{background:var(--card)}.badge{color:#fff}';
+  const dk = { bg: t.dark_background, surface: t.dark_surface, text: t.dark_text, accent: t.dark_accent };
+  const original = t.preset === 'obsidian' && t.app_mode === 'dark' && !Object.values(dk).some(Boolean) && !t.surface && !t.success && !t.error;
+  if (!original && ok) {
+    if (t.app_mode === 'light') css += block(vars('light')) + themed + light;
+    else if (t.app_mode === 'auto') css += block(vars('light')) + themed + '@media (prefers-color-scheme:light){' + light + '}@media (prefers-color-scheme:dark){' + block(vars('dark', dk)) + '}';
+    else css += block(vars('dark', dk)) + themed;
+  }
+  const fv = {};
+  if (t.heading_font && t.heading_font !== 'cormorant' && STACK_V5[t.heading_font]) fv['--serif'] = STACK_V5[t.heading_font];
+  if (t.body_font && t.body_font !== 'system' && STACK_V5[t.body_font]) fv['--sans'] = STACK_V5[t.body_font];
+  css += block(fv);
+  if (t.button_bg) css += `.btn:not(.ghost){background:${t.button_bg};color:${t.button_text || autoInk(t.button_bg)}}`;
+  else if (t.button_text) css += `.btn:not(.ghost){color:${t.button_text}}`;
+  if (t.link) css += `a:not(.btn):not(.li):not(.tile){color:${t.link}}`;
+  if (t.header_bg) css += `.appbar,.top,header.top,.head{background:${t.header_bg}}`;
+  if (t.header_bg || t.header_text) css += `.appbar,.top,header.top,.head,.wordmark{color:${t.header_text || autoInk(t.header_bg)}}`;
+  if (t.footer_bg) css += `.tabbar{background:${t.footer_bg}!important}`;
+  if (t.footer_bg || t.footer_text) { const ink = t.footer_text || autoInk(t.footer_bg); css += `.tabbar button{color:${mixHex(ink, t.footer_bg || '#000000', 0.35)}}.tabbar button.on{color:${ink}}`; }
+  if (Number(t.font_scale) && Number(t.font_scale) !== 100) css += `html,body{font-size:${Math.round(15 * Number(t.font_scale)) / 100}px}`;
+  if (t.heading_weight) css += `h1,h2,h3,.h1,.h2{font-weight:${t.heading_weight}}`;
+  if (t.body_weight) css += `body{font-weight:${t.body_weight}}`;
+  if (st.app_grid !== 2) css += `.grid{grid-template-columns:repeat(${st.app_grid},minmax(0,1fr))}`;
+  if (st.card_radius !== null && st.card_radius !== undefined) css += `.pcard,.card,.tile,.today,.li,.list{border-radius:${st.card_radius}px}`;
+  if (st.card_shadow === 'soft') css += '.pcard,.card{box-shadow:0 6px 20px rgba(0,0,0,.12)}';
+  if (st.card_shadow === 'strong') css += '.pcard,.card{box-shadow:0 12px 34px rgba(0,0,0,.28)}';
+  if (st.card_border === false) css += '.pcard,.card{border-color:transparent}';
+  if (st.button_shape !== 'default') css += `.btn{border-radius:${{ square: '0', rounded: '12px', pill: '999px' }[st.button_shape]}}`;
+  if (st.header_layout === 'center') css += '.appbar,.top{justify-content:center;text-align:center}';
+  if (st.density === 'compact') css += '.sec{margin-top:16px}.grid{gap:8px}.view{--pad:12px}';
+  if (st.animations === false) css += '*,*::before,*::after{animation:none!important;transition:none!important}';
+  const nav = (st.bottom_nav && st.bottom_nav.length ? st.bottom_nav : BOTTOM_NAV_ITEMS);
+  if (nav.join() !== BOTTOM_NAV_ITEMS.join()) {
+    css += `.tabbar{grid-template-columns:repeat(${nav.length},1fr)}`;
+    for (const id of BOTTOM_NAV_ITEMS) css += nav.includes(id) ? `.tabbar button[data-go="${id}"]{order:${nav.indexOf(id) + 1}}` : `.tabbar button[data-go="${id}"]{display:none}`;
+  }
+  if (st.custom_css) css += '\n/* owner custom CSS */\n' + st.custom_css;
+  return css;
+}
+function designOf(ui) { const o = {}; for (const k of DESIGN_SECTIONS) o[k] = JSON.parse(JSON.stringify(ui[k])); return o; }
+function diffKeys(a, b, prefix = '') {
+  const out = [];
+  for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+    const x = a ? a[k] : undefined, y = b ? b[k] : undefined;
+    if (x && y && typeof x === 'object' && typeof y === 'object' && !Array.isArray(x)) out.push(...diffKeys(x, y, prefix + k + '.'));
+    else if (JSON.stringify(x) !== JSON.stringify(y)) out.push({ key: prefix + k, from: typeof x === 'string' && x.length > 60 ? x.slice(0, 60) + '…' : x, to: typeof y === 'string' && y.length > 60 ? y.slice(0, 60) + '…' : y });
+  }
+  return out;
+}
+// validate a whole design (theme + layout + style) against the live one; returns the merged value
+function validateDesign(b, ui) {
+  const out = {}, fields = {};
+  for (const sec of DESIGN_SECTIONS) {
+    if (!b || b[sec] === undefined) { out[sec] = ui[sec]; continue; }
+    if (!b[sec] || typeof b[sec] !== 'object' || Array.isArray(b[sec])) { fields[sec] = 'Invalid ' + sec + '.'; continue; }
+    const r = sec === 'style' ? validateStyle(b[sec], ui.style) : validateUi(sec, b[sec], ui[sec]);
+    for (const [k, m] of Object.entries(r.fields)) fields[sec + '.' + k] = m;
+    out[sec] = r.value;
+  }
+  return { value: out, fields };
+}
+async function writeDesign(env, design) {
+  const up = 'INSERT INTO settings (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at';
+  const t = nowIso();
+  await env.DB.batch(DESIGN_SECTIONS.map((k) => env.DB.prepare(up).bind('ui:' + k, JSON.stringify(design[k]), t)));
+  uiCache = { at: 0, v: null };
+}
+async function recordVersion(env, request, label) {
+  const ui = await getUi(env, true);
+  const count = (await env.DB.prepare('SELECT COUNT(*) AS n FROM ui_versions').first()).n;
+  await env.DB.prepare('INSERT INTO ui_versions (label, data, created_at, ip) VALUES (?,?,?,?)').bind(String(label).slice(0, 80), JSON.stringify(designOf(ui)), nowIso(), clientIp(request)).run();
+  await env.DB.prepare('DELETE FROM ui_versions WHERE id NOT IN (SELECT id FROM ui_versions ORDER BY id DESC LIMIT 25)').run();
+  return count;
+}
+// before the very first change, the look as it was is kept as version 1 so "Undo" always has somewhere to go
+async function ensureBaseVersion(env, request) {
+  const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM ui_versions').first()).n;
+  if (!n) await recordVersion(env, request, 'Look before the design studio');
+}
+async function publishDesign(env, request, design, label) {
+  const before = designOf(await getUi(env, true));
+  await ensureBaseVersion(env, request);
+  await writeDesign(env, design);
+  await recordVersion(env, request, label);
+  const changes = diffKeys(before, designOf(await getUi(env, true)));
+  request.__audit = label + ' — ' + (changes.length ? changes.slice(0, 12).map((c) => c.key).join(', ') + (changes.length > 12 ? ` (+${changes.length - 12} more)` : '') : 'no change');
+  request.__auditDetail = changes.slice(0, 60);
+  return changes;
+}
+function previewOf(ui, design) {
+  const d = { ...ui, ...design };
+  return { css: siteThemeCss(d), app_css: appThemeCss(d), warnings: designWarnings(d.theme, d.style) };
+}
+async function designState(env) {
+  const ui = await getUi(env, true);
+  const draft = jparse(await settingGet(env, 'ui_draft'), null);
+  const versions = (await env.DB.prepare('SELECT id, label, created_at FROM ui_versions ORDER BY id DESC LIMIT 20').all()).results;
+  const themes = jparse(await settingGet(env, 'ui_themes'), []) || [];
+  const live = designOf(ui);
+  return { live, draft: draft && draft.design ? { ...draft.design, saved_at: draft.saved_at } : null, versions, themes,
+    presets: THEME_PRESETS, fonts: FONTS, font_labels: FONT_LABELS, font_devanagari: FONT_DEVANAGARI, sections: { home_web: HOME_WEB_SECTIONS, home_app: HOME_APP_SECTIONS }, bottom_nav_items: BOTTOM_NAV_ITEMS,
+    defaults: designOf(mergeUi({})), preview: previewOf(ui, draft && draft.design ? validateDesign(draft.design, ui).value : live) };
+}
+async function adminDesign(request, env) { await requireAdmin(env, request); return json(200, { ok: true, ...(await designState(env)) }); }
+async function adminDesignPreview(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request, 40000);
+  const ui = await getUi(env, true);
+  const { value, fields } = validateDesign(b, ui);
+  const p = previewOf(ui, value);
+  return json(200, { ok: true, ...p, fields });
+}
+async function adminDesignDraft(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request, 40000);
+  const ui = await getUi(env, true);
+  const { value, fields } = validateDesign(b, ui);
+  assertValid(fields);
+  await settingPut(env, 'ui_draft', JSON.stringify({ design: value, saved_at: nowIso() }));
+  request.__audit = 'draft saved (not live)';
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignDiscard(request, env) {
+  await requireAdmin(env, request); checkOrigin(request);
+  await env.DB.prepare("DELETE FROM settings WHERE key = 'ui_draft'").run();
+  request.__audit = 'draft discarded';
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignPublish(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request, 40000);
+  const ui = await getUi(env, true);
+  let src = b.design;
+  if (!src) { const d = jparse(await settingGet(env, 'ui_draft'), null); if (!d || !d.design) throw new HttpError(400, 'no_draft', 'There is no draft to publish.'); src = d.design; }
+  const { value, fields } = validateDesign(src, ui);
+  assertValid(fields);
+  const changes = await publishDesign(env, request, value, clamp(b.label || '', 60) || 'Published');
+  await env.DB.prepare("DELETE FROM settings WHERE key = 'ui_draft'").run();
+  return json(200, { ok: true, changes: changes.length, ...(await designState(env)) });
+}
+async function adminDesignRestore(request, env, id) {
+  await requireAdmin(env, request); checkOrigin(request);
+  const row = await env.DB.prepare('SELECT id, label, data, created_at FROM ui_versions WHERE id = ?').bind(Number(id)).first();
+  if (!row) throw new HttpError(404, 'not_found', 'That version is no longer kept.');
+  const ui = await getUi(env, true);
+  const { value } = validateDesign(jparse(row.data, {}), { ...ui, theme: UI_DEFAULTS.theme, layout: UI_DEFAULTS.layout, style: STYLE_DEFAULTS });
+  await publishDesign(env, request, value, 'Restored version #' + row.id);
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignUndo(request, env) {
+  await requireAdmin(env, request); checkOrigin(request);
+  const rows = (await env.DB.prepare('SELECT id FROM ui_versions ORDER BY id DESC LIMIT 2').all()).results;
+  if (rows.length < 2) throw new HttpError(400, 'nothing_to_undo', 'Nothing to undo yet.');
+  return adminDesignRestore(request, env, rows[1].id);
+}
+async function adminDesignReset(request, env) {
+  await requireAdmin(env, request); checkOrigin(request);
+  await publishDesign(env, request, designOf(mergeUi({})), 'Reset to default');
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignExport(request, env) {
+  await requireAdmin(env, request);
+  const ui = await getUi(env, true);
+  const body = JSON.stringify({ format: 'avermontis-theme', version: 1, exported_at: nowIso(), ...designOf(ui) }, null, 2);
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="avermontis-theme.json"', 'Cache-Control': 'no-store', ...SEC_HEADERS } });
+}
+async function adminDesignImport(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request, 40000);
+  const data = b.data && typeof b.data === 'object' ? b.data : b;
+  if (data.format !== 'avermontis-theme') throw new HttpError(400, 'invalid_input', 'This is not an AVERMONTIS theme file.');
+  const ui = await getUi(env, true);
+  const { value, fields } = validateDesign({ theme: data.theme, layout: data.layout, style: data.style }, ui);
+  assertValid(fields);
+  await settingPut(env, 'ui_draft', JSON.stringify({ design: value, saved_at: nowIso() }));
+  request.__audit = 'theme file imported as a draft';
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignSaveTheme(request, env) {
+  await requireAdmin(env, request);
+  const b = await readJson(request, 40000);
+  const name = clamp(b.name, 40);
+  if (name.length < 2) throw new HttpError(400, 'invalid_input', 'Give the theme a name (2-40 characters).', null, { name: 'Give the theme a name.' });
+  const ui = await getUi(env, true);
+  const { value, fields } = validateDesign({ theme: b.theme, style: b.style }, ui);
+  assertValid(fields);
+  const list = (jparse(await settingGet(env, 'ui_themes'), []) || []).filter((x) => x.name.toLowerCase() !== name.toLowerCase());
+  if (list.length >= 30) throw new HttpError(400, 'too_many', 'You can keep up to 30 saved themes. Delete one first.');
+  list.unshift({ id: crypto.randomUUID().slice(0, 8), name, theme: { ...value.theme, preset: 'custom' }, style: value.style, created_at: nowIso() });
+  await settingPut(env, 'ui_themes', JSON.stringify(list));
+  request.__audit = 'saved theme "' + name + '"';
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+async function adminDesignDeleteTheme(request, env, id) {
+  await requireAdmin(env, request); checkOrigin(request);
+  const list = jparse(await settingGet(env, 'ui_themes'), []) || [];
+  const gone = list.find((x) => x.id === id);
+  await settingPut(env, 'ui_themes', JSON.stringify(list.filter((x) => x.id !== id)));
+  request.__audit = 'deleted saved theme "' + (gone ? gone.name : id) + '"';
+  return json(200, { ok: true, ...(await designState(env)) });
+}
+// v4's per-section Save (Customize > Colours/Layout) now also keeps a version, so Undo covers it too
+async function adminPutUiV5(request, env, section) {
+  const design = DESIGN_SECTIONS.includes(section);
+  const before = await getUi(env, true);
+  if (design) await ensureBaseVersion(env, request);
+  const res = await adminPutUi(request, env, section);
+  if (res.status === 200) {
+    const after = await getUi(env, true);
+    const ch = diffKeys(before[section], after[section]);
+    if (design) await recordVersion(env, request, 'Saved ' + section);
+    request.__audit = section + ': ' + (ch.length ? ch.slice(0, 10).map((c) => c.key).join(', ') : 'no change');
+    request.__auditDetail = section === 'chat' ? null : ch.slice(0, 40);
+  }
+  return res;
+}
+async function adminResetUiV5(request, env, section) {
+  const design = DESIGN_SECTIONS.includes(section);
+  if (design) await ensureBaseVersion(env, request);
+  const res = await adminResetUi(request, env, section);
+  if (res.status === 200 && design) await recordVersion(env, request, 'Reset ' + section);
+  request.__audit = section + ' back to original';
+  return res;
+}
+const ROUTES_V5 = [
+  ['POST', /^\/api\/auth\/admin-pin$/, adminPinStep],
+  ['POST', /^\/api\/admin\/handoff$/, adminHandoff],
+  ['GET', /^\/api\/admin\/security$/, adminGetSecurity],
+  ['PUT', /^\/api\/admin\/security$/, adminPutSecurity],
+  ['POST', /^\/api\/admin\/logout-all$/, adminLogoutAll],
+  ['GET', /^\/api\/admin\/audit$/, adminAudit],
+  ['GET', /^\/api\/admin\/design$/, adminDesign],
+  ['POST', /^\/api\/admin\/design\/preview$/, adminDesignPreview],
+  ['PUT', /^\/api\/admin\/design\/draft$/, adminDesignDraft],
+  ['DELETE', /^\/api\/admin\/design\/draft$/, adminDesignDiscard],
+  ['POST', /^\/api\/admin\/design\/publish$/, adminDesignPublish],
+  ['POST', /^\/api\/admin\/design\/versions\/(\d+)\/restore$/, (r, env, u, m) => adminDesignRestore(r, env, m[1])],
+  ['POST', /^\/api\/admin\/design\/undo$/, adminDesignUndo],
+  ['POST', /^\/api\/admin\/design\/reset$/, adminDesignReset],
+  ['GET', /^\/api\/admin\/design\/export$/, adminDesignExport],
+  ['POST', /^\/api\/admin\/design\/import$/, adminDesignImport],
+  ['POST', /^\/api\/admin\/design\/themes$/, adminDesignSaveTheme],
+  ['DELETE', /^\/api\/admin\/design\/themes\/([a-z0-9-]{4,12})$/, (r, env, u, m) => adminDesignDeleteTheme(r, env, m[1])]
+];
+ROUTES.push(...ROUTES_V5);

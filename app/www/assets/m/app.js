@@ -17,6 +17,7 @@ var CAP = window.Capacitor, NATIVE = !!(CAP && CAP.isNativePlatform && CAP.isNat
 var PLUG = NATIVE ? (CAP.Plugins || {}) : {};
 var BASE = NATIVE ? 'https://avermontis.sites.tab.bot' : '';
 var TOKEN_KEY = 'avm_app_token', CAT_KEY = 'avm_app_catalog';
+var PREVIEW = /[?&]avm_preview=1/.test(location.search) && window.parent !== window;   // shown inside the owner's design studio
 function absUrl(u) { return /^\//.test(u) ? BASE + u : u; }
 
 /* ---------- facts copied from the website (assets/app.js), not new claims ---------- */
@@ -171,7 +172,7 @@ function toggleWish(id, el) {
 }
 
 /* ---------- skin profile -> routine (built only from store products and their own directions) ---------- */
-function profile() { return get(K.profile, null); }
+function profile() { var p = get(K.profile, null); return p || (PREVIEW ? { name: '', skin: 'normal', concerns: ['dullness'], style: 'simple' } : null); }
 function routineFor(pr, when) {
   pr = pr || {}; var concerns = pr.concerns || [], essential = pr.style === 'essential';
   var onlyTone = concerns.length === 1 && concerns[0] === 'uneven-tone';
@@ -698,7 +699,7 @@ function paintBag() {
   var away = SET.free_shipping_from - t.items_subtotal;
   b.innerHTML = lines.map(function (l) {
     return '<div class="bline"><img src="' + esc(img(l.p)) + '" alt="" data-prod="' + esc(l.p.id) + '"><div><b>' + esc(l.p.name) + '</b><span class="small muted">' + esc(l.p.size || '') + ' \u00B7 ' + inr(l.p.price) + '</span>' +
-      '<div class="bm"><div class="qty"><button type="button" data-q="' + esc(l.p.id) + '" data-d="-1" aria-label="Less">' + (l.qty === 1 ? I.trash.replace('<svg', '<svg width="16" height="16"') : '\u2212') + '</button><span>' + l.qty + '</span><button type="button" data-q="' + esc(l.p.id) + '" data-d="1" aria-label="More">+</button></div><b style="font-family:var(--sans);font-size:1rem">' + inr(l.total) + '</b></div></div></div>';
+      '<div class="bm"><div class="qty"><button type="button" data-q="' + esc(l.p.id) + '" data-d="-1" aria-label="Less">' + (l.qty === 1 ? I.trash.replace('<svg', '<svg width="16" height="16"') : '\u2212') + '</button><span>' + l.qty + '</span><button type="button" data-q="' + esc(l.p.id) + '" data-d="1" aria-label="More">+</button></div><b style="font-family:var(--sans);font-size:1rem">' + inr(l.total) + '</b></div>' + (canBargain(l.p) ? '<button type="button" class="v4-bl-offer press" data-offer="' + esc(l.p.id) + '">' + V4I.tag + ' Make an offer</button>' : '') + '</div></div>';
   }).join('') +
     '<div class="ship">' + (away > 0 ? 'Add ' + inr(away) + ' more for free shipping' : 'You\u2019ve unlocked free shipping') + '<div class="bar"><i style="width:' + Math.min(100, t.items_subtotal / SET.free_shipping_from * 100) + '%"></i></div></div>' +
     '<div class="field" style="display:flex;gap:8px;margin-bottom:10px"><input class="inp" id="b-code" placeholder="Coupon code" value="' + esc(code) + '" autocapitalize="characters" aria-label="Coupon code" style="flex:1"><button type="button" class="btn sm ghost press" id="b-apply">Apply</button></div><div id="b-cmsg"></div>' +
@@ -822,7 +823,7 @@ RENDER.me = function (el) {
     (feat('ar') ? '<button type="button" class="li press" data-act="ar"><span class="lic">' + V4I.cube + '</span><span class="lt"><b>AR &amp; 3D</b><span>In your room, glow selfie, scan your bottle</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
     (NATIVE && NATIVE_PLUG() && NATIVE_PLUG().setIcon ? '<button type="button" class="li press" data-act="icon"><span class="lic">' + I.sparkle + '</span><span class="lt"><b>App icon</b><span>Pick the home-screen icon you like</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
     '<a class="li press" href="/?view=site"><span class="lic">' + I.globe + '</span><span class="lt"><b>Open the website</b><span>avermontis.sites.tab.bot</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
-    '<a class="li press" href="/admin"><span class="lic">' + I.lock + '</span><span class="lt"><b>Store owner?</b><span>Open the owner dashboard (password needed)</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a></div>' +
+    '<button type="button" class="li press" data-act="owner"><span class="lic">' + I.lock + '</span><span class="lt"><b>Store owner?</b><span>Sign in with username admin to customise the app</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button></div>' +
     '<div id="m-out"></div><p class="small muted" style="text-align:center;margin-top:22px">AVERMONTIS app ' + APP_VERSION + '</p>';
   var a = get(ADDR, null); if (a && a.city) $('#m-addr').textContent = a.name + ' \u00B7 ' + a.city + ' ' + (a.pincode || '');
   ptr(el, function () { return Promise.all([me(true), loadCatalog(true)]).then(function () { ordersP = null; rerender('me'); }); });
@@ -848,7 +849,7 @@ function authSheet(mode) {
   openSheet('<div class="tabs2"><button type="button" data-mode="login" class="' + (mode === 'login' ? 'on' : '') + '">Sign in</button><button type="button" data-mode="signup" class="' + (mode === 'signup' ? 'on' : '') + '">Create account</button></div>' +
     '<h2>' + (mode === 'login' ? 'Welcome back' : 'Create your account') + '</h2><p class="muted small">Same account as the AVERMONTIS website.</p>' +
     '<form id="a-form" novalidate>' + (mode === 'signup' ? '<div class="field" data-f="name"><label for="a-name">Name</label><input class="inp" id="a-name" name="name" autocomplete="name" maxlength="60"><div class="err"></div></div>' : '') +
-    '<div class="field" data-f="email"><label for="a-email">Email</label><input class="inp" id="a-email" name="email" type="email" autocomplete="email" maxlength="254"><div class="err"></div></div>' +
+    '<div class="field" data-f="email"><label for="a-email">' + (mode === 'login' ? 'Email or username' : 'Email') + '</label><input class="inp" id="a-email" name="email" type="' + (mode === 'login' ? 'text' : 'email') + '" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="' + (mode === 'login' ? 'username' : 'email') + '" maxlength="254"><div class="err"></div></div>' +
     '<div class="field" data-f="password"><label for="a-pw">Password</label><input class="inp" id="a-pw" name="password" type="password" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" maxlength="128"><div class="err"></div></div>' +
     (mode === 'signup' ? '<p class="small muted">At least 8 characters, with a letter and a number.</p>' : '<p class="small"><a href="/forgot">Forgot password?</a></p>') +
     '<div id="a-alert"></div><button class="btn press" type="submit" id="a-go">' + (mode === 'login' ? 'Sign in' : 'Create account') + '</button></form>');
@@ -857,17 +858,34 @@ function authSheet(mode) {
     e.preventDefault(); var f = this, btn = $('#a-go'); $('#a-alert').innerHTML = ''; $$('.field', f).forEach(function (x) { x.classList.remove('bad'); });
     var body = { email: f.email.value.trim(), password: f.password.value }; if (f.name) body.name = f.name.value.trim();
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-    api('POST', '/api/auth/' + mode, body).then(function () {
+    api('POST', '/api/auth/' + mode, body).then(function (r) {
+      if (r && (r.admin || r.step === 'pin')) { ownerSignedIn(r); throw { owner: true }; }
       buzz(20); meP = null; ordersP = null; wishSrv = null;
       var local = get(K.wish, []);
       return me(true).then(function (u) { return Promise.all(local.map(function (id) { return api('POST', '/api/account/wishlist', { product_id: id }).catch(function () {}); })).then(function () { put(K.wish, []); return u; }); });
     }).then(function (u) { closeSheet(); toast('Signed in' + (u && u.name ? ' \u00B7 ' + firstName(u.name) : '')); rerender('me'); })
       .catch(function (err) {
+        if (err && err.owner) return;
         btn.disabled = false; btn.textContent = mode === 'login' ? 'Sign in' : 'Create account';
         if (err.fields) Object.keys(err.fields).forEach(function (k) { var x = f.querySelector('[data-f="' + k + '"]'); if (x) { x.classList.add('bad'); x.querySelector('.err').textContent = err.fields[k]; } });
         $('#a-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>';
       });
   });
+}
+/* v5: the store owner signs in on the same sheet with username "admin" + the owner password (+ PIN if on).
+   The website then has the owner cookie; the installed app gets a one-time code that the site's own page swaps for that
+   cookie inside the app (the app itself never keeps an owner password or token). */
+function ownerSignedIn(r) {
+  if (r.step === 'pin') {
+    openSheet('<span class="eyebrow">Store owner</span><h2>Enter your PIN</h2><p class="muted small">Second step: your 4\u20136 digit owner PIN.</p><form id="pin-form" novalidate><div class="field"><label for="o-pin">Owner PIN</label><input class="inp" id="o-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><div class="err"></div></div><div id="pin-alert"></div><button class="btn press" type="submit" id="pin-go">Continue</button></form>');
+    $('#pin-form').addEventListener('submit', function (e) { e.preventDefault(); var v = $('#o-pin').value.trim(), b = $('#pin-go');
+      if (!/^\d{4,6}$/.test(v)) { $('#pin-alert').innerHTML = '<div class="alert">Enter 4 to 6 digits.</div>'; return; }
+      b.disabled = true; api('POST', '/api/auth/admin-pin', { challenge: r.challenge, pin: v }).then(ownerSignedIn, function (err) { b.disabled = false; $('#pin-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>'; }); });
+    return;
+  }
+  closeSheet(); toast('Opening the owner area\u2026');
+  if (NATIVE && r.open) { location.href = BASE + r.open; return; }    // stays inside the app (allowNavigation) and lands on /admin
+  location.href = r.redirect || '/admin';
 }
 function trackSheet(id) {
   var a = get(ADDR, {}) || {};
@@ -994,6 +1012,7 @@ document.addEventListener('click', function (e) {
     else if (a === 'notes') notesSheet();
     else if (a === 'ar') loadCatalog().then(function () { arSheet(); });
     else if (a === 'icon') iconSheet();
+    else if (a === 'owner') { authSheet('login'); var ae = $('#a-email'); if (ae) { ae.value = 'admin'; var pw = $('#a-pw'); if (pw) pw.focus(); } }
     else if (a === 'logout') api('POST', '/api/auth/logout', {}).catch(function () {}).then(function () { if (NATIVE) { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} } meP = null; ordersP = null; wishSrv = null; toast('Signed out'); rerender('me'); });
   }
 });
@@ -1009,7 +1028,7 @@ function closeSheetQuiet() { if (sheetOpen) { sheetOpen = false; $('#scrim').cla
 var CFG_KEY = 'avm_app_cfg_v4', ICON_KEY = 'avm_app_icon_mine', SEEN_N = 'avm_app_seen_notes', CHAT_KEY = 'avm_app_chat_v1';
 var CFG = get(CFG_KEY, null) || {}, UI = CFG.ui || {}, NOTES = [];
 var NATIVE_PLUG = function () { return PLUG.AvmNative || null; };
-var APP_VERSION = '4.0.0';
+var APP_VERSION = '5.0.0';
 function hx(h) { h = String(h || ''); return /^#[0-9a-f]{6}$/i.test(h) ? h : null; }
 function rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
 function mix(a, b, t) { var x = rgb(a), y = rgb(b); return '#' + x.map(function (v, i) { return ('0' + Math.round(v + (y[i] - v) * t).toString(16)).slice(-2); }).join(''); }
@@ -1041,16 +1060,41 @@ var APP_THEMED_CSS = '.today{background:radial-gradient(120% 90% at 100% 0%,colo
 var APP_LIGHT_CSS = 'html.lightapp .icon{background:rgba(0,0,0,.04)}html.lightapp .tile::after{background:linear-gradient(180deg,transparent 15%,rgba(255,255,255,.92))}html.lightapp .tile img{opacity:.5}' +
   'html.lightapp .btn{color:#fff;background:linear-gradient(180deg,var(--gold2),var(--gold))}html.lightapp .sheet,html.lightapp .tabbar{background:var(--card)}html.lightapp .badge{color:#fff}';
 function applyLook() {
-  var t = UI.theme || null, css = themeVars(t), st = document.getElementById('avm-app-theme');
+  if (window.__avmPreview) return;      // the owner's design studio is showing a draft in this frame
+  var t = UI.theme || null, server = typeof UI.app_css === 'string', css = server ? UI.app_css : themeVars(t), st = document.getElementById('avm-app-theme');
   if (!st) { st = document.createElement('style'); st.id = 'avm-app-theme'; document.head.appendChild(st); }
   st.textContent = css;
-  var light = !!(t && t.app_mode === 'light' && css);
+  // v5: the server sends the whole look (colours, dark/auto, fonts, cards, buttons, bottom bar, custom CSS) as one CSS string
+  var light = !!(t && css && (t.app_mode === 'light' || (t.app_mode === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches)));
+  if (server) { document.documentElement.classList.remove('lightapp'); document.documentElement.classList.toggle('themed', !!css); syncChrome(light); applyNav(); return; }
   document.documentElement.classList.toggle('lightapp', light); document.documentElement.classList.toggle('themed', !!css);
+  syncChrome(light);
+}
+function syncChrome(light) {
   var ob = getComputedStyle(document.documentElement).getPropertyValue('--ob').trim() || '#0B0C0B';
   var m = document.querySelector('meta[name=theme-color]'); if (m) m.setAttribute('content', ob);
   var cs = document.querySelector('meta[name=color-scheme]'); if (cs) cs.setAttribute('content', light ? 'light' : 'dark');
   if (NATIVE && PLUG.StatusBar) { try { PLUG.StatusBar.setStyle({ style: light ? 'LIGHT' : 'DARK' }); PLUG.StatusBar.setBackgroundColor({ color: ob }); } catch (e) {} }
   var name = storeName(); $$('.wordmark').forEach(function (w) { w.textContent = name; });
+}
+// v5: the owner picks the bottom bar items and their order (Home and Me always stay)
+function applyNav() {
+  var bar = $('#tabbar'); if (!bar) return;
+  var want = (UI.style && Array.isArray(UI.style.bottom_nav) && UI.style.bottom_nav.length >= 3) ? UI.style.bottom_nav : null;
+  $$('#tabbar button').forEach(function (b) { var id = b.getAttribute('data-go'), i = want ? want.indexOf(id) : 0; b.style.order = want && i >= 0 ? i + 1 : ''; b.hidden = !!(want && i < 0 && id !== 'home' && id !== 'me'); });
+}
+if (window.matchMedia) { try { matchMedia('(prefers-color-scheme: light)').addEventListener('change', function () { applyLook(); }); } catch (e) {} }
+/* the owner's design studio shows this screen in a frame and sends draft CSS (nothing is saved here) */
+if (/[?&]avm_preview=1/.test(location.search) && window.parent !== window) {
+  window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin) return; var d = e.data || {};
+    if (d.type !== 'avm-app-css') return;
+    window.__avmPreview = true;
+    var st = document.getElementById('avm-app-theme'); if (!st) { st = document.createElement('style'); st.id = 'avm-app-theme'; document.head.appendChild(st); }
+    st.textContent = d.css || ''; document.documentElement.classList.remove('lightapp');
+    if (d.style) { UI.style = d.style; applyNav(); }
+  });
+  setTimeout(function () { try { parent.postMessage({ type: 'avm-preview-ready' }, location.origin); } catch (e) {} }, 300);
 }
 function storeName() { return (UI.brand && UI.brand.store_name) || 'Avermontis'; }
 function feat(k) { return !UI.features || UI.features[k] !== false; }
@@ -1325,7 +1369,7 @@ function boot() {
   window.addEventListener('storage', function (e) { if (e.key === CART) paintBadges(); });
   var start = (location.hash || '#home').slice(1).split('/')[0];
   var deep = new URLSearchParams(location.search).get('product');
-  if (!get(K.seen, 0) || !profile()) { onboarding(); show('home'); }
+  if (!PREVIEW && (!get(K.seen, 0) || !profile())) { onboarding(); show('home'); }
   else { show(VIEWS.indexOf(start) >= 0 ? start : 'home'); }
   if (deep) loadCatalog().then(function () { productSheet(deep); });
   if (NATIVE) nativeBoot();
