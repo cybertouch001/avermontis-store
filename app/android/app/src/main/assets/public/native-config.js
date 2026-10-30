@@ -1,0 +1,2 @@
+/* written by tools/bundle_web.py: images shipped inside the app */
+window.AVM_BUNDLED = ["/img/campaign-tall.webp", "/img/campaign-wide.webp", "/img/daily-moisturizer-v1.webp", "/img/daily-moisturizer.webp", "/img/hero-v1.webp", "/img/hero.webp", "/img/hydrating-face-wash-v1.webp", "/img/hydrating-face-wash.webp", "/img/niacinamide-serum-v1.webp", "/img/niacinamide-serum.webp", "/img/ritual.webp", "/img/story.webp", "/img/sunscreen-spf50-v1.webp", "/img/sunscreen-spf50.webp", "/img/vitamin-c-serum-v1.webp", "/img/vitamin-c-serum.webp"];

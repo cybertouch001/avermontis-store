@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# build outputs
+build/
+dist/
+out/
+.gradle/
+.cxx/
+app/android/app/build/
+app/android/build/
+app/android/local.properties
+
+# app packages
+*.apk
+*.aab
+
+# signing (never commit)
+*.jks
+*.keystore
+keystore.properties
+key.properties
+*.p12
+
+# secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

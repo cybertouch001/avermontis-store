@@ -1,0 +1,4 @@
+assets/hero3d.js is built from hero3d.src.js with three@0.170.0:
+  npm i three@0.170.0 esbuild@0.24.0
+  npx esbuild hero3d.src.js --bundle --minify --format=esm --target=es2019 --outfile=site/assets/hero3d.js
+URL flags: ?3d=off shows the photo hero, ?3d=force skips the speed checks.

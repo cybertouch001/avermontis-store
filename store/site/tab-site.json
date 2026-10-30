@@ -1,0 +1,19 @@
+{
+ "kind": "worker",
+ "entry": "_worker.js",
+ "bindings": [
+  {
+   "type": "d1",
+   "name": "DB"
+  },
+  {
+   "type": "r2",
+   "name": "MEDIA"
+  }
+ ],
+ "worker": {
+  "compatibility_date": "2026-08-01",
+  "html_handling": "auto-trailing-slash",
+  "not_found_handling": "404-page"
+ }
+}

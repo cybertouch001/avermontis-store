@@ -1,0 +1,35 @@
+{
+  "appId": "bot.tab.sites.avermontis.twa",
+  "appName": "AVERMONTIS",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0B0C0B",
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": false
+  },
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 3000,
+      "launchAutoHide": false,
+      "backgroundColor": "#0B0C0B",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_INSIDE",
+      "splashFullScreen": false,
+      "splashImmersive": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0B0C0B",
+      "overlaysWebView": false
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_avermontis",
+      "iconColor": "#C9A96E"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+<!--{"title": "My account | Avermontis", "description": "Your Avermontis orders, invoices, wishlist and sign-in history.", "noindex": true}-->
+<div class="wrap page" id="account-root"><div class="acct-head"><div><span class="eyebrow">My account</span><h1>Hello, <span id="acct-name">there</span></h1><p class="muted small" id="acct-email"></p></div><button class="btn ghost sm" id="logout-btn" type="button">Sign out</button></div>
+<div class="tabs" role="tablist"><button type="button" role="tab" data-tab="orders" class="on">Orders</button><button type="button" role="tab" data-tab="wishlist">Wishlist</button><button type="button" role="tab" data-tab="security">Sign-in history</button></div>
+<section data-pane="orders"><div id="orders-list"><p class="muted"><span class="spinner"></span> Loading&hellip;</p></div></section>
+<section data-pane="wishlist" class="hidden"><div id="wish-root"><p class="muted"><span class="spinner"></span> Loading&hellip;</p></div></section>
+<section data-pane="security" class="hidden"><p class="muted small">Every sign-in to your account, newest first. If you see something you don&rsquo;t recognise, <a href="/forgot">change your password</a>.</p><div id="logins-list"></div></section>
+</div>

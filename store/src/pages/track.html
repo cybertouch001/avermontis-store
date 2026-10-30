@@ -1,0 +1,7 @@
+<!--{"title": "Track your order | Avermontis", "description": "Track your Avermontis order with your order number and phone or email."}-->
+<div class="wrap page narrow"><nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> / Track order</nav><span class="eyebrow">Order status</span><h1>Track your order</h1><p class="muted">Enter your order number (from your confirmation, e.g. AV-261026-ABC123) and the phone number or email you used at checkout.</p>
+<form class="panel" id="track-form" novalidate>
+<div class="row2"><div class="field"><label for="track-order_id">Order number</label><input id="track-order_id" name="order_id" type="text" autocapitalize="characters" autocomplete="off" maxlength="24" placeholder="AV-XXXXXX-XXXXXX"><p class="err" id="track-form-err-order_id"></p></div><div class="field"><label for="track-contact">Phone or email</label><input id="track-contact" name="contact" type="text" autocomplete="tel" maxlength="254"><p class="err" id="track-form-err-contact"></p></div></div>
+<div class="form-alert hidden" role="alert"></div><button class="btn" type="submit">Track order</button></form>
+<div id="track-result" aria-live="polite"></div>
+<p class="small muted">Signed in? Your orders are also in <a href="/account">My account</a>.</p></div>

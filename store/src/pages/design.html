@@ -1,0 +1,111 @@
+<!--{"title": "System design | Avermontis", "description": "How the Avermontis store works and how it will grow."}-->
+<div class="wrap page prose" style="max-width:900px">
+<span class="eyebrow">For the owner</span><h1>System design</h1>
+<p class="muted">How the store works now that it has a real backend, and how to grow it from 2 to 200 users without over-building. Honest summary: <strong>static pages on a global CDN + one server function + a SQL database (Cloudflare D1)</strong>. Customer accounts, saved orders, sign-in history and the owner dashboard are live. Online payment (Razorpay) is the next step.</p>
+
+<h2>1. Main parts and what each does</h2>
+<div class="table-wrap"><table><thead><tr><th>Part</th><th>What it does</th><th>Status</th></tr></thead><tbody><tr><td>Pages (HTML + CSS)</td><td>Home, Shop, Product, Cart, Checkout, Guides, FAQs, Contact, policies, Sign in, Create account, My account. Served from a global CDN.</td><td>Live</td></tr><tr><td><code>products.js</code></td><td>The one file with every product, price, image and setting. The server reads prices from this same file.</td><td>Live</td></tr><tr><td><code>assets/app.js</code></td><td>Shop search/filter/sort, cart, checkout checks, sign-in / sign-up forms, My account page, offline notice.</td><td>Live</td></tr><tr><td>Server function (<code>_worker.js</code>)</td><td>All rules that touch money, access or data: re-prices every order, validates input, hashes passwords, manages sessions, enforces "own data only" and "owner only", rate limits, security headers.</td><td>Live</td></tr><tr><td>Database (D1 / SQLite)</td><td>users, sessions, orders, order_items, login_history, settings, rate_limits. Schema in <code>migrations/0001_init.sql</code>, applied automatically.</td><td>Live</td></tr><tr><td>Owner dashboard (<code>/admin</code>)</td><td>Phone-first: counts at the top, Orders (change status, delete test orders), Customers, Login history (incl. failed attempts, IST time, device, IP), CSV export.</td><td>Live</td></tr><tr><td>One-time setup (<code>/admin/setup</code>)</td><td>The first visitor creates the owner password (stored hashed). After that it is closed forever. No password exists in the code.</td><td>Live</td></tr><tr><td>Order email (mailto)</td><td>Optional extra: "Email a copy of my order". Orders no longer depend on it — every order is saved.</td><td>Live (extra)</td></tr><tr><td>Payments (Razorpay / UPI)</td><td>Online payment with server-side signature check.</td><td>Next step</td></tr></tbody></table></div>
+
+<h2>2. How data moves</h2>
+<ol>
+<li>Shopper opens a page → CDN sends HTML, CSS, JS, <code>products.js</code> and WebP images.</li>
+<li>Cart = <code>{product id: quantity}</code> in the browser. Totals on screen are always recalculated from <code>products.js</code>.</li>
+<li>Sign up / sign in → <code>POST /api/auth/*</code> → server checks the password against a PBKDF2 hash, writes a row to <strong>login_history</strong> (success or failure, IP, device), and sets an HttpOnly session cookie. JavaScript never sees the session.</li>
+<li>"Place order" → browser sends only <code>items [id, qty]</code> + address → server re-prices from <code>products.js</code>, validates, links the order to the signed-in account (from the cookie, never from the request body) and saves it in <strong>orders + order_items</strong>.</li>
+<li>My account → <code>/api/account/*</code> returns only rows where <code>user_id = the signed-in user</code>.</li>
+<li>Owner opens <code>/admin</code> → owner session cookie → <code>/api/admin/*</code> reads everything; status changes write back to <strong>orders</strong>.</li>
+</ol>
+
+<h2>3. Diagram</h2>
+<pre>
+ Shopper's phone                          Owner's phone
+ ┌───────────────────────────┐            ┌──────────────────────┐
+ │ pages + app.js + cart     │            │ /admin  (admin.js)   │
+ └──────┬──────────────┬─────┘            └──────────┬───────────┘
+        │ GET pages     │ /api/auth/*  /api/orders     │ /api/admin/*
+        ▼               ▼  /api/account/*              ▼  (owner cookie)
+ ┌────────────┐   ┌─────────────────────────────────────────────┐
+ │ CDN static │◄──┤ Server function (_worker.js)                │
+ │ files      │   │ origin check · JSON only · rate limits      │
+ └────────────┘   │ prices from products.js · PBKDF2 passwords  │
+                  │ own-data-only · owner-only · uniform errors │
+                  └───────────────────┬─────────────────────────┘
+                                      ▼
+                  ┌─────────────────────────────────────────────┐
+                  │ D1 database: users · sessions · orders ·    │
+                  │ order_items · login_history · settings ·    │
+                  │ rate_limits                                 │
+                  └─────────────────────────────────────────────┘
+ Next:  Razorpay ◄─► server function (webhook + signature check)
+</pre>
+
+<h2>4. What breaks first at 10× traffic</h2>
+<ol>
+<li><strong>The owner's manual work, not the servers.</strong> Every order now lands in /admin, but confirming COD orders by phone and shipping by hand will take hours at 10×. Fix: courier integration (Shiprocket) + order notifications.</li>
+<li><strong>Cash on Delivery risk.</strong> More COD = more fake orders and returns-to-origin. Fix: Razorpay + phone confirmation for big COD orders.</li>
+<li><strong>No stock tracking.</strong> Two people can buy the last unit. Fix: a stock column + decrement inside the order batch.</li>
+<li><strong>Editing <code>products.js</code> by hand.</strong> Fine for 5 products. Fix at ~30 products: products table + edit form in /admin.</li>
+<li><strong>Database limits.</strong> D1's free tier is ample for 200 users (millions of reads/day). Watch the admin "All orders" list: add pagination filters by date when it passes a few thousand rows (indexes already exist).</li>
+</ol>
+
+<h2>5. Database (live, Cloudflare D1 / SQLite)</h2>
+<p>Money is whole rupees (integers). Times are UTC ISO strings, shown in IST. Every table change goes in a new numbered file in <code>migrations/</code>.</p>
+<div class="table-wrap"><table><thead><tr><th>Table</th><th>Fields</th><th>Relations / constraints / indexes</th></tr></thead><tbody><tr><td>users</td><td>id (int, PK), email (text, unique, case-insensitive), name (text), password_hash (text: pbkdf2_sha256$iterations$salt$hash), created_at, last_login_at (null)</td><td>—</td></tr><tr><td>sessions</td><td>id (text PK = SHA-256 of the cookie token, so a DB leak leaks no sessions), kind (customer | admin), user_id (null for owner), created_at, expires_at, ip, user_agent</td><td>user_id → users (cascade); index on expires_at</td></tr><tr><td>orders</td><td>id (text PK, e.g. AV-261026-3F9A1C), user_id (null = guest), status (new | confirmed | shipped | delivered | cancelled), payment (cod), subtotal, shipping, total (int ₹), name, phone, email (null), address, city, state, pincode, notes (null), ip, created_at, updated_at</td><td>user_id → users (set null); check total = subtotal + shipping; indexes (created_at DESC), (user_id, created_at DESC)</td></tr><tr><td>order_items</td><td>id (int PK), order_id, product_id, name, size, unit_price, qty (1–10), line_total</td><td>order_id → orders (cascade); check line_total = unit_price × qty; index on order_id. Prices copied at purchase time.</td></tr><tr><td>login_history</td><td>id, user_id (null), email, kind (customer | admin), event (signup | login | admin_setup | admin_login), success (0/1), reason (wrong_password | no_account | email_taken), ip, user_agent, device, created_at</td><td>indexes (created_at DESC), (user_id, created_at DESC)</td></tr><tr><td>settings</td><td>key (PK), value, updated_at — holds the owner password hash (admin_password_hash)</td><td>primary key = setup can only succeed once</td></tr><tr><td>rate_limits</td><td>key (bucket:ip, PK), count, reset_at</td><td>one row per IP per bucket, fixed window</td></tr></tbody></table></div>
+<h3>Indexes for the most-used queries</h3>
+<div class="table-wrap"><table><thead><tr><th>Query</th><th>Index</th></tr></thead><tbody><tr><td>A customer’s orders, newest first</td><td><code>orders_user_created (user_id, created_at DESC)</code></td></tr><tr><td>Admin: all orders newest first, orders today</td><td><code>orders_created (created_at DESC)</code></td></tr><tr><td>Items of an order</td><td><code>order_items_order (order_id)</code></td></tr><tr><td>Admin login history / a user’s sign-ins</td><td><code>login_history_created</code>, <code>login_history_user_created</code></td></tr><tr><td>Sign-in by email</td><td>unique index on <code>users.email</code></td></tr><tr><td>Products by category sorted by price; title/ingredient search</td><td>Today in the browser from products.js (5 items). When products move to the DB: <code>(category, price) WHERE active</code> + SQLite FTS5 on title + ingredients.</td></tr></tbody></table></div>
+<h3>Backup and restore</h3>
+<ol>
+<li>Owner, any time: /admin → Orders → "Export orders CSV" and Login history → "Export login history CSV" (save to Google Drive).</li>
+<li>Full backup: D1 keeps 30 days of point-in-time history (Time Travel) — ask Tab to restore to a moment before a mistake.</li>
+<li>Restore of a CSV or SQL dump goes into a fresh database, checked, then switched over.</li>
+</ol>
+
+<h2>6. API routes</h2>
+<p>Every error has the same shape: <code>{ok:false, error:{code, message}}</code>. No stack traces or secrets are ever returned. Every POST / PATCH / DELETE must be JSON and come from this website (Origin check) — that plus SameSite=Lax cookies blocks CSRF.</p>
+<div class="table-wrap"><table><thead><tr><th>Method</th><th>Path</th><th>Who can call</th><th>Input</th><th>Output</th><th>Errors</th></tr></thead><tbody><tr><td>GET</td><td>/api/health</td><td>Anyone</td><td>—</td><td><code>{ok, db:"ok", time}</code></td><td>500 server_error</td></tr><tr><td>POST</td><td>/api/auth/signup</td><td>Anyone (same site)</td><td>name 2–60, email, password 8–128 (letter + number)</td><td>201 + session cookie, <code>{user}</code></td><td>400 invalid_input (fields), 409 email_taken, 403 bad_origin, 415, 429 rate_limited</td></tr><tr><td>POST</td><td>/api/auth/login</td><td>Anyone (same site)</td><td>email, password</td><td>200 + session cookie, <code>{user}</code></td><td>400, 401 invalid_credentials (same message for unknown email or wrong password), 403, 429</td></tr><tr><td>POST</td><td>/api/auth/logout</td><td>Signed-in customer</td><td>—</td><td>200, cookie cleared</td><td>403 bad_origin</td></tr><tr><td>GET</td><td>/api/auth/me</td><td>Anyone</td><td>cookie</td><td><code>{user}</code> or <code>{user:null}</code></td><td>—</td></tr><tr><td>GET</td><td>/api/account/orders</td><td>Customer (own data only)</td><td>cookie</td><td>own orders + items, newest first</td><td>401 not_signed_in</td></tr><tr><td>GET</td><td>/api/account/orders/:id</td><td>Customer (own data only)</td><td>order id</td><td>one own order</td><td>401, 404 not_found (also for other people's orders — no peeking, no enumeration)</td></tr><tr><td>GET</td><td>/api/account/logins</td><td>Customer (own data only)</td><td>cookie</td><td>own last 50 sign-ins (time, device, IP, result)</td><td>401</td></tr><tr><td>POST</td><td>/api/orders</td><td>Anyone; linked to account if signed in</td><td>items [{id, qty 1–10}] max 20, address, payment "cod"</td><td>201 <code>{order}</code> priced by the server and saved</td><td>400 invalid_cart / invalid_customer (fields) / payment_unavailable, 403, 413, 415, 429 (5 per 10 min per IP)</td></tr><tr><td>GET</td><td>/api/admin/setup-status</td><td>Anyone</td><td>—</td><td><code>{setup_open}</code></td><td>—</td></tr><tr><td>POST</td><td>/api/admin/setup</td><td>Anyone, only while no owner password exists</td><td>password ≥10 (letter + number), confirm</td><td>201 + owner cookie</td><td>400, 409 setup_closed (forever after first use), 429</td></tr><tr><td>POST</td><td>/api/admin/login</td><td>Anyone (same site)</td><td>password</td><td>200 + owner cookie (12 h)</td><td>401 (logged), 409 setup_required, 429</td></tr><tr><td>POST</td><td>/api/admin/logout</td><td>Owner</td><td>—</td><td>200</td><td>403</td></tr><tr><td>GET</td><td>/api/admin/stats</td><td>Owner</td><td>—</td><td>orders today (IST), sales, users, new orders, failed sign-ins 24 h</td><td>403 forbidden</td></tr><tr><td>GET</td><td>/api/admin/orders</td><td>Owner</td><td>status?, limit ≤200, offset</td><td>all orders newest first, with items + address</td><td>400, 403</td></tr><tr><td>PATCH</td><td>/api/admin/orders/:id</td><td>Owner</td><td>status: new | confirmed | shipped | delivered | cancelled</td><td><code>{id, status}</code></td><td>400, 403, 404</td></tr><tr><td>DELETE</td><td>/api/admin/orders/:id</td><td>Owner</td><td>—</td><td><code>{deleted:true}</code> (for test/spam orders)</td><td>403, 404</td></tr><tr><td>GET</td><td>/api/admin/customers</td><td>Owner</td><td>limit, offset</td><td>users + order count + spent</td><td>403</td></tr><tr><td>GET</td><td>/api/admin/logins</td><td>Owner</td><td>result? ok | fail, limit, offset</td><td>every sign-in attempt incl. failed, with IST time, device, IP</td><td>400, 403</td></tr><tr><td>GET</td><td>/api/admin/export/orders.csv</td><td>Owner</td><td>—</td><td>CSV download</td><td>403</td></tr><tr><td>GET</td><td>/api/admin/export/logins.csv</td><td>Owner</td><td>—</td><td>CSV download</td><td>403</td></tr></tbody></table></div>
+
+<h2>7. Roles matrix</h2>
+<div class="table-wrap"><table><thead><tr><th>Page / action</th><th>Guest</th><th>Customer</th><th>Owner (admin)</th></tr></thead><tbody><tr><td>Shop pages, cart, checkout, guides, policies, /design</td><td>✓</td><td>✓</td><td>✓</td></tr><tr><td>Place an order (POST /api/orders)</td><td>✓ guest</td><td>✓ linked to account</td><td>✓</td></tr><tr><td>Sign up / sign in pages</td><td>✓</td><td>redirects to My account</td><td>✓</td></tr><tr><td>My account: own orders + own sign-in history</td><td>✗ 401</td><td>✓ only their own</td><td>— (owner uses /admin)</td></tr><tr><td>Another customer's order</td><td>✗</td><td>✗ 404</td><td>✓ via /admin</td></tr><tr><td>/admin page shell</td><td>login form only</td><td>login form only</td><td>✓ dashboard</td></tr><tr><td>All /api/admin/* data + CSV export + status change</td><td>✗ 403</td><td>✗ 403</td><td>✓</td></tr><tr><td>/admin/setup</td><td>✓ only until the owner password exists</td><td>same</td><td>closed after first use</td></tr></tbody></table></div>
+<p class="note">Enforced on the server for every request, not only in the UI. Tested: a customer gets 403 on every admin API, a customer cookie renamed to the owner cookie gets 403, customer B gets 404 for customer A's order.</p>
+
+<h2>8. Security checklist</h2>
+<ul>
+<li><strong>Prices &amp; money:</strong> server re-prices every order from products.js; browser prices, totals and user ids in the request are ignored.</li>
+<li><strong>Passwords:</strong> PBKDF2-SHA256, 100,000 iterations, random 16-byte salt per password; never stored or logged in plain text. Same error for unknown email and wrong password.</li>
+<li><strong>Sessions:</strong> random 256-bit token in an HttpOnly, Secure, SameSite=Lax cookie; only its SHA-256 is stored. Customer 30 days, owner 12 hours. Sign-out deletes the session.</li>
+<li><strong>Owner access:</strong> no password in the code or in chat; one-time /admin/setup guarded by the database primary key (works exactly once, even under a race).</li>
+<li><strong>Rate limits</strong> (top of <code>_worker.js</code>): login + signup 10 per 2 min per IP; owner login 10 per 2 min; orders 5 per 10 min; other writes 120/min. Answer: 429 + Retry-After + "try again in N seconds".</li>
+<li><strong>Injection:</strong> every SQL query uses bound parameters; all output escaped in the page (XSS); CSV export neutralises spreadsheet formulas.</li>
+<li><strong>Headers:</strong> Content-Security-Policy (own scripts only, no framing), HSTS, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy; account and admin pages are no-store + noindex.</li>
+<li><strong>OWASP Top 10:</strong> A01 access control ✓ (server checks), A02 crypto ✓ (PBKDF2, HTTPS only), A03 injection ✓, A04 design ✓ (server-side rules), A05 misconfig ✓ (headers, no stack traces), A06 outdated packages ✓ (no packages in production), A07 auth ✓ (rate limits, hashed sessions), A08 integrity ✓ (no third-party scripts), A09 logging ◐ (sign-ins logged; error alerts are a next step), A10 SSRF ✓ (no server-side fetch of user URLs).</li>
+</ul>
+
+<h2>9. Architecture for a solo builder</h2>
+<div class="table-wrap"><table><thead><tr><th></th><th>A. Live now: Cloudflare Worker + D1</th><th>B. Alternative: Next.js + Supabase</th></tr></thead><tbody><tr><td>Stack</td><td>Static HTML/CSS/JS + one Worker (<code>_worker.js</code>) + D1 (SQLite), no framework, no npm packages in production</td><td>Next.js app (pages + API routes) + Supabase (Postgres, auth, storage)</td></tr><tr><td>Hosting</td><td>Cloudflare (CDN + Worker + D1) at avermontis.sites.tab.bot</td><td>Vercel + Supabase</td></tr><tr><td>Cost type</td><td>Free tier covers 200 users comfortably</td><td>Free tiers to start; paid (~$20–45/month) as it grows</td></tr><tr><td>Complexity</td><td>Low — one server file, one SQL file</td><td>Medium — framework, build step, two providers</td></tr><tr><td>When to switch</td><td>When you need many server features (Razorpay webhooks + emails + product admin + reviews) and a team; or >~10k orders/month</td><td>—</td></tr></tbody></table></div><h3>Folder structure (live)</h3>
+<pre>
+avermontis/
+├─ site/                    everything that is deployed
+│  ├─ *.html                pages (shop, product, cart, checkout, login, signup, account, guides, policies, design)
+│  ├─ admin.html            owner dashboard (/admin)
+│  ├─ admin/setup.html      one-time owner password setup (/admin/setup)
+│  ├─ products.js           products, prices, images, shipping settings (edit here)
+│  ├─ assets/app.js         shop, cart, checkout, sign-in, My account
+│  ├─ assets/admin.js       dashboard screens
+│  ├─ assets/styles.css     black + green theme
+│  ├─ _worker.js            server: API routes, rules, security (limits at the top)
+│  └─ tab-site.json         hosting settings (Worker + D1 binding "DB")
+├─ migrations/0001_init.sql database tables + indexes (new change = new numbered file)
+├─ test/                    npm test: pages, pricing, auth, permissions, admin, CSRF, rate limits
+└─ package.json             "npm test" runs every test
+</pre>
+
+<h2>10. The 5 best next steps (2 → 200 users)</h2>
+<ol>
+<li><strong>Razorpay</strong> — online payment with webhook verification; the orders table is ready (add payment_status).</li>
+<li><strong>Products in the database</strong> — edit products, prices and stock from /admin without touching code (orders + status already live).</li>
+<li><strong>Shipping partner</strong> (e.g. Shiprocket) — pincode serviceability check at checkout and automatic tracking links.</li>
+<li><strong>Password reset by email + saved addresses</strong> — accounts and order history are live; add reset links and verified reviews.</li>
+<li><strong>Monitoring</strong> — uptime check every minute, error tracking with alerts to the store email, and a weekly look at conversion (visits → carts → orders).</li>
+</ol>
+<p class="note">Watch these numbers to know when to do the next step: orders per day (&gt;5/day → courier integration), COD cancellations (&gt;10% → push online payment), time spent editing products (&gt;30 min/week → database).</p>
+</div>

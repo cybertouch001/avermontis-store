@@ -1,0 +1,29 @@
+<!--{"title": "AR & 3D | AVERMONTIS", "description": "See AVERMONTIS bottles in 3D and in your room, try the glow selfie frame (just for fun) and scan a bottle for how-to-use steps."}-->
+<link rel="stylesheet" href="/assets/ar/ar.css?v=4.0.0">
+<div class="wrap page ar-page">
+<span class="eyebrow">AR &amp; 3D</span>
+<h1>Try AVERMONTIS around you</h1>
+<p class="lead">Your camera stays on your phone &mdash; nothing is recorded or uploaded.</p>
+<section class="ar-card" id="ar-viewer-card">
+ <div class="ar-head"><h2>View in 3D &amp; in your room</h2><span class="ar-tag real">Real AR</span></div>
+ <p>Spin the bottle with your finger. On a supported phone, tap <b>View in your room</b> to place it on your table at its real size.</p>
+ <div class="ar-pick" id="ar-pick" role="tablist" aria-label="Choose a product"></div>
+ <div class="ar-stage" id="ar-stage"><p class="muted small">Loading the 3D model&hellip;</p></div>
+ <p class="muted small">The 3D bottles are made by us from the product photos &mdash; the real pack may differ slightly.</p>
+</section>
+<div class="ar-grid">
+<section class="ar-card">
+ <div class="ar-head"><h2>Glow selfie</h2><span class="ar-tag fun">Filter &middot; just for fun</span></div>
+ <p>A golden frame and sparkles that follow your face, with the AVERMONTIS wordmark. It is a camera filter only &mdash; it does not analyse or change your skin.</p>
+ <button type="button" class="btn" id="ar-selfie">Open glow selfie</button>
+</section>
+<section class="ar-card">
+ <div class="ar-head"><h2>Scan your bottle</h2><span class="ar-tag real">Real AR</span></div>
+ <p>Point your camera at an AVERMONTIS bottle or its photo: we show how to use it, step by step, and a one-tap reorder. You can also pick the product from a list.</p>
+ <button type="button" class="btn" id="ar-scan">Start scanning</button>
+</section>
+</div>
+<p class="muted small" id="ar-note"></p>
+</div>
+<script src="/assets/ar/ar.js?v=4.0.0"></script>
+<script src="/assets/ar-page.js?v=4.0.0"></script>

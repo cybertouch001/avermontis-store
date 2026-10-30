@@ -1,0 +1,20 @@
+<!--{"title": "Checkout | Avermontis", "description": "Checkout securely with Cash on Delivery.", "noindex": true}-->
+<div class="wrap page" id="checkout-root"><nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/cart">Cart</a> / Checkout</nav>
+<h1>Checkout</h1><p class="alert info hidden" id="acct-note"></p>
+<div class="cart-layout">
+<form id="checkout-form" class="panel" novalidate>
+ <h2 class="h3">Delivery address</h2>
+ <div class="field"><label for="f-name">Full name</label><input id="f-name" name="name" type="text" autocomplete="name" maxlength="80" required><p class="err" id="checkout-form-err-name"></p></div>
+ <div class="row2"><div class="field"><label for="f-phone">Mobile number</label><input id="f-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national" maxlength="14" required placeholder="10-digit mobile"><p class="err" id="checkout-form-err-phone"></p></div><div class="field"><label for="f-email">Email (for invoice &amp; updates)</label><input id="f-email" name="email" type="email" inputmode="email" autocomplete="email" maxlength="254"><p class="err" id="checkout-form-err-email"></p></div></div>
+ <div class="field"><label for="f-address">Address (house no., street, area)</label><textarea id="f-address" name="address" rows="2" autocomplete="street-address" maxlength="300" required></textarea><p class="err" id="checkout-form-err-address"></p></div>
+ <div class="row3"><div class="field"><label for="f-pincode">Pincode</label><input id="f-pincode" name="pincode" type="text" inputmode="numeric" autocomplete="postal-code" maxlength="6" required><p class="err" id="checkout-form-err-pincode"></p></div><div class="field"><label for="f-city">City</label><input id="f-city" name="city" type="text" autocomplete="address-level2" maxlength="60" required><p class="err" id="checkout-form-err-city"></p></div><div class="field"><label for="f-state">State</label><select id="f-state" name="state" autocomplete="address-level1" required></select><p class="err" id="checkout-form-err-state"></p></div></div>
+ <div class="field"><label for="f-notes">Delivery note (optional)</label><input id="f-notes" name="notes" maxlength="300" placeholder="Landmark, preferred time&hellip;"></div>
+ <h2 class="h3">Payment</h2>
+ <label class="radio on"><input type="radio" name="payment" value="cod" checked> <span><strong>Cash on Delivery</strong><br><span class="muted small">Pay in cash when your order arrives.</span></span></label>
+ <label class="radio disabled"><input type="radio" name="payment" value="online" disabled> <span><strong>UPI / Cards</strong><br><span class="muted small">Coming soon</span></span></label>
+ <div id="form-alert" class="hidden" role="alert"></div>
+ <button class="btn block lg" id="place" type="submit">Place order &middot; <span id="place-total">&hellip;</span></button>
+ <p class="note center">&#128274; Prices are re-checked by our server. By placing the order you agree to our <a href="/terms">Terms</a>.</p>
+</form>
+<aside class="summary"><h2>Order summary</h2><div id="checkout-summary"><p class="muted"><span class="spinner"></span> Loading&hellip;</p></div></aside>
+</div></div>

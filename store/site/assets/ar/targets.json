@@ -1,0 +1,56 @@
+{
+ "version": 1,
+ "note": "index in targets.mind -> product id",
+ "targets": [
+  {
+   "index": 0,
+   "id": "vitamin-c-serum",
+   "kind": "photo"
+  },
+  {
+   "index": 1,
+   "id": "niacinamide-serum",
+   "kind": "photo"
+  },
+  {
+   "index": 2,
+   "id": "hydrating-face-wash",
+   "kind": "photo"
+  },
+  {
+   "index": 3,
+   "id": "daily-moisturizer",
+   "kind": "photo"
+  },
+  {
+   "index": 4,
+   "id": "sunscreen-spf50",
+   "kind": "photo"
+  },
+  {
+   "index": 5,
+   "id": "vitamin-c-serum",
+   "kind": "pack"
+  },
+  {
+   "index": 6,
+   "id": "niacinamide-serum",
+   "kind": "pack"
+  },
+  {
+   "index": 7,
+   "id": "hydrating-face-wash",
+   "kind": "pack"
+  },
+  {
+   "index": 8,
+   "id": "daily-moisturizer",
+   "kind": "pack"
+  },
+  {
+   "index": 9,
+   "id": "sunscreen-spf50",
+   "kind": "pack"
+  }
+ ]
+}
