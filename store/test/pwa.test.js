@@ -9,7 +9,7 @@ const SITE = path.join(__dirname, '..', 'site');
 const ORIGIN = 'https://avermontis.sites.tab.bot';
 const read = (f) => fs.readFileSync(path.join(SITE, f), 'utf8');
 const pngSize = (f) => { const b = fs.readFileSync(path.join(SITE, f)); assert.strictEqual(b.toString('ascii', 1, 4), 'PNG', f + ' is a PNG'); return [b.readUInt32BE(16), b.readUInt32BE(20)]; };
-const builtPages = (() => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(path.join(SITE, '_pages', d))) { const r = path.join(d, n); if (fs.statSync(path.join(SITE, '_pages', r)).isDirectory()) walk(r); else if (n.endsWith('.html') && !r.startsWith('admin') && r !== 'app.html') out.push(r); /* app.html is the app's own UI, tested in app.test.js */ } }; walk(''); return out; })();
+const builtPages = (() => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(path.join(SITE, '_pages', d))) { const r = path.join(d, n); if (fs.statSync(path.join(SITE, '_pages', r)).isDirectory()) walk(r); else if (n.endsWith('.html') && !r.startsWith('admin') && r !== 'app.html' && r !== path.join('download', 'admin.html')) out.push(r); /* app.html is the app's own UI, tested in app.test.js */ } }; walk(''); return out; })();
 
 test('manifest: installable fields, brand, colours, icons that exist at their stated sizes', () => {
   const m = JSON.parse(read('manifest.webmanifest'));

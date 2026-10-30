@@ -21,8 +21,8 @@ html = open(os.path.join(SITE, '_pages', 'app.html'), encoding='utf-8').read()
 # web-only bits: manifest/install metas and the website fallback link
 html = re.sub(r'\s*<link rel="(manifest|apple-touch-icon)"[^>]*>', '', html)
 html = re.sub(r'\s*<meta name="(apple-mobile-web-app-[a-z-]+|mobile-web-app-capable|robots)"[^>]*>', '', html)
-html = html.replace('<script src="/assets/m/app.js?v=5.0.0" defer></script>',
-                    '<script src="/native-config.js"></script>\n<script src="/products.js"></script>\n<script src="/assets/m/app.js?v=5.0.0" defer></script>')
+html = html.replace('<script src="/assets/m/app.js?v=6.0.0" defer></script>',
+                    '<script src="/native-config.js"></script>\n<script src="/products.js"></script>\n<script src="/assets/m/app.js?v=6.0.0" defer></script>')
 html = re.sub(r'<noscript>.*?</noscript>', '', html, flags=re.S)
 html = html.replace('<html lang="en-IN">', '<html lang="en-IN" class="native-boot">')
 assert '/native-config.js' in html and 'manifest' not in html

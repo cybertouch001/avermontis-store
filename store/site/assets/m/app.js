@@ -823,7 +823,7 @@ RENDER.me = function (el) {
     (feat('ar') ? '<button type="button" class="li press" data-act="ar"><span class="lic">' + V4I.cube + '</span><span class="lt"><b>AR &amp; 3D</b><span>In your room, glow selfie, scan your bottle</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
     (NATIVE && NATIVE_PLUG() && NATIVE_PLUG().setIcon ? '<button type="button" class="li press" data-act="icon"><span class="lic">' + I.sparkle + '</span><span class="lt"><b>App icon</b><span>Pick the home-screen icon you like</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button>' : '') +
     '<a class="li press" href="/?view=site"><span class="lic">' + I.globe + '</span><span class="lt"><b>Open the website</b><span>avermontis.sites.tab.bot</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</a>' +
-    '<button type="button" class="li press" data-act="owner"><span class="lic">' + I.lock + '</span><span class="lt"><b>Store owner?</b><span>Sign in with username admin to customise the app</span></span>' + I.chev.replace('<svg', '<svg class="chev"') + '</button></div>' +
+    '</div>' +
     '<div id="m-out"></div><p class="small muted" style="text-align:center;margin-top:22px">AVERMONTIS app ' + APP_VERSION + '</p>';
   var a = get(ADDR, null); if (a && a.city) $('#m-addr').textContent = a.name + ' \u00B7 ' + a.city + ' ' + (a.pincode || '');
   ptr(el, function () { return Promise.all([me(true), loadCatalog(true)]).then(function () { ordersP = null; rerender('me'); }); });
@@ -849,7 +849,7 @@ function authSheet(mode) {
   openSheet('<div class="tabs2"><button type="button" data-mode="login" class="' + (mode === 'login' ? 'on' : '') + '">Sign in</button><button type="button" data-mode="signup" class="' + (mode === 'signup' ? 'on' : '') + '">Create account</button></div>' +
     '<h2>' + (mode === 'login' ? 'Welcome back' : 'Create your account') + '</h2><p class="muted small">Same account as the AVERMONTIS website.</p>' +
     '<form id="a-form" novalidate>' + (mode === 'signup' ? '<div class="field" data-f="name"><label for="a-name">Name</label><input class="inp" id="a-name" name="name" autocomplete="name" maxlength="60"><div class="err"></div></div>' : '') +
-    '<div class="field" data-f="email"><label for="a-email">' + (mode === 'login' ? 'Email or username' : 'Email') + '</label><input class="inp" id="a-email" name="email" type="' + (mode === 'login' ? 'text' : 'email') + '" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="' + (mode === 'login' ? 'username' : 'email') + '" maxlength="254"><div class="err"></div></div>' +
+    '<div class="field" data-f="email"><label for="a-email">' + 'Email' + '</label><input class="inp" id="a-email" name="email" type="' + (mode === 'login' ? 'text' : 'email') + '" inputmode="email" autocapitalize="none" spellcheck="false" autocomplete="' + (mode === 'login' ? 'username' : 'email') + '" maxlength="254"><div class="err"></div></div>' +
     '<div class="field" data-f="password"><label for="a-pw">Password</label><input class="inp" id="a-pw" name="password" type="password" autocomplete="' + (mode === 'login' ? 'current-password' : 'new-password') + '" maxlength="128"><div class="err"></div></div>' +
     (mode === 'signup' ? '<p class="small muted">At least 8 characters, with a letter and a number.</p>' : '<p class="small"><a href="/forgot">Forgot password?</a></p>') +
     '<div id="a-alert"></div><button class="btn press" type="submit" id="a-go">' + (mode === 'login' ? 'Sign in' : 'Create account') + '</button></form>');
@@ -859,34 +859,18 @@ function authSheet(mode) {
     var body = { email: f.email.value.trim(), password: f.password.value }; if (f.name) body.name = f.name.value.trim();
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
     api('POST', '/api/auth/' + mode, body).then(function (r) {
-      if (r && (r.admin || r.step === 'pin')) { ownerSignedIn(r); throw { owner: true }; }
       buzz(20); meP = null; ordersP = null; wishSrv = null;
       var local = get(K.wish, []);
       return me(true).then(function (u) { return Promise.all(local.map(function (id) { return api('POST', '/api/account/wishlist', { product_id: id }).catch(function () {}); })).then(function () { put(K.wish, []); return u; }); });
     }).then(function (u) { closeSheet(); toast('Signed in' + (u && u.name ? ' \u00B7 ' + firstName(u.name) : '')); rerender('me'); })
       .catch(function (err) {
-        if (err && err.owner) return;
         btn.disabled = false; btn.textContent = mode === 'login' ? 'Sign in' : 'Create account';
         if (err.fields) Object.keys(err.fields).forEach(function (k) { var x = f.querySelector('[data-f="' + k + '"]'); if (x) { x.classList.add('bad'); x.querySelector('.err').textContent = err.fields[k]; } });
         $('#a-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>';
       });
   });
 }
-/* v5: the store owner signs in on the same sheet with username "admin" + the owner password (+ PIN if on).
-   The website then has the owner cookie; the installed app gets a one-time code that the site's own page swaps for that
-   cookie inside the app (the app itself never keeps an owner password or token). */
-function ownerSignedIn(r) {
-  if (r.step === 'pin') {
-    openSheet('<span class="eyebrow">Store owner</span><h2>Enter your PIN</h2><p class="muted small">Second step: your 4\u20136 digit owner PIN.</p><form id="pin-form" novalidate><div class="field"><label for="o-pin">Owner PIN</label><input class="inp" id="o-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="one-time-code"><div class="err"></div></div><div id="pin-alert"></div><button class="btn press" type="submit" id="pin-go">Continue</button></form>');
-    $('#pin-form').addEventListener('submit', function (e) { e.preventDefault(); var v = $('#o-pin').value.trim(), b = $('#pin-go');
-      if (!/^\d{4,6}$/.test(v)) { $('#pin-alert').innerHTML = '<div class="alert">Enter 4 to 6 digits.</div>'; return; }
-      b.disabled = true; api('POST', '/api/auth/admin-pin', { challenge: r.challenge, pin: v }).then(ownerSignedIn, function (err) { b.disabled = false; $('#pin-alert').innerHTML = '<div class="alert">' + esc(err.message) + '</div>'; }); });
-    return;
-  }
-  closeSheet(); toast('Opening the owner area\u2026');
-  if (NATIVE && r.open) { location.href = BASE + r.open; return; }    // stays inside the app (allowNavigation) and lands on /admin
-  location.href = r.redirect || '/admin';
-}
+/* v6: the store owner no longer signs in from the app; owner work happens in the separate Avermontis Admin app. */
 function trackSheet(id) {
   var a = get(ADDR, {}) || {};
   openSheet('<span class="eyebrow">Order tracking</span><h2>Track an order</h2><form id="t-form" novalidate>' +
@@ -1012,7 +996,6 @@ document.addEventListener('click', function (e) {
     else if (a === 'notes') notesSheet();
     else if (a === 'ar') loadCatalog().then(function () { arSheet(); });
     else if (a === 'icon') iconSheet();
-    else if (a === 'owner') { authSheet('login'); var ae = $('#a-email'); if (ae) { ae.value = 'admin'; var pw = $('#a-pw'); if (pw) pw.focus(); } }
     else if (a === 'logout') api('POST', '/api/auth/logout', {}).catch(function () {}).then(function () { if (NATIVE) { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} } meP = null; ordersP = null; wishSrv = null; toast('Signed out'); rerender('me'); });
   }
 });
@@ -1028,7 +1011,7 @@ function closeSheetQuiet() { if (sheetOpen) { sheetOpen = false; $('#scrim').cla
 var CFG_KEY = 'avm_app_cfg_v4', ICON_KEY = 'avm_app_icon_mine', SEEN_N = 'avm_app_seen_notes', CHAT_KEY = 'avm_app_chat_v1';
 var CFG = get(CFG_KEY, null) || {}, UI = CFG.ui || {}, NOTES = [];
 var NATIVE_PLUG = function () { return PLUG.AvmNative || null; };
-var APP_VERSION = '5.0.0';
+var APP_VERSION = '6.0.0';
 function hx(h) { h = String(h || ''); return /^#[0-9a-f]{6}$/i.test(h) ? h : null; }
 function rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
 function mix(a, b, t) { var x = rgb(a), y = rgb(b); return '#' + x.map(function (v, i) { return ('0' + Math.round(v + (y[i] - v) * t).toString(16)).slice(-2); }).join(''); }

@@ -111,3 +111,8 @@
 .v5-phone-in iframe,.v5-desk-in iframe{max-width:none;display:block}
 .v5-pv{flex-wrap:wrap}.v5-phone,.v5-desk{flex:none}
 @media (min-width:701px){.v5-pv.both .v5-desk-in{width:340px;height:227px}.v5-pv.both .v5-desk-in iframe{zoom:.2563}}
+
+/* v6: the full owner dashboard opened inside the Avermontis Admin app (phone): compact header, sign-out lives in the app */
+body.in-admin-app .site-header .admin-badge, body.in-admin-app #admin-logout { display: none !important; }
+body.in-admin-app #back-to-app { padding: 8px 12px; font-size: 12px; letter-spacing: .06em; margin-right: 8px; }
+@media (max-width: 480px) { body.in-admin-app .site-header .logo { font-size: 18px; } }

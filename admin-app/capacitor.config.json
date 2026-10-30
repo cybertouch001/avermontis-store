@@ -1,0 +1,35 @@
+{
+  "appId": "bot.tab.sites.avermontis.admin",
+  "appName": "Avermontis Admin",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0E1311",
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": false,
+    "appendUserAgent": "AvermontisAdmin/6.0.0"
+  },
+  "server": {
+    "url": "https://avermontis.sites.tab.bot/admin/app",
+    "androidScheme": "https",
+    "hostname": "localhost",
+    "errorPath": "error.html",
+    "cleartext": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2500,
+      "launchAutoHide": true,
+      "backgroundColor": "#0E1311",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_INSIDE",
+      "splashFullScreen": false,
+      "splashImmersive": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0E1311",
+      "overlaysWebView": false
+    }
+  }
+}

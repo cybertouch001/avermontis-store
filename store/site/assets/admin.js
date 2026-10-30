@@ -666,16 +666,21 @@ function insightsBlock(p){
    v5: Design studio (every colour, dark mode, fonts incl. Hindi, presets + saved themes, layout, cards,
    buttons, header, app bottom bar, announcement, custom CSS, phone + desktop preview, draft -> publish,
    version history, undo, reset, export/import), Security (PIN, auto sign-out, sessions, sign-in history),
-   Audit log. Owner sign-in from the normal login page (username "admin") and from the app (one-time handoff).
+   Audit log. v6: owner sign-in only here (/admin) and in the separate Avermontis Admin app (/admin/app).
    ================================================================================================= */
-var APP_MODE = (function(){ try { if (/[?&]app=1/.test(location.search)) sessionStorage.setItem('avm_admin_app', '1'); return sessionStorage.getItem('avm_admin_app') === '1'; } catch(e){ return /[?&]app=1/.test(location.search); } })();
+// v6: APP_MODE = this page is open inside the separate "Avermontis Admin" app (it opens /admin?app=1#tab from its own home
+// screen at /admin/app). The customer app no longer reaches /admin at all.
+var APP_MODE = (function(){ var nat = false; try { nat = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AvmAdmin); } catch(e){}
+  try { if (/[?&]app=1/.test(location.search)) sessionStorage.setItem('avm_admin_app', '1'); return nat || sessionStorage.getItem('avm_admin_app') === '1'; } catch(e){ return nat || /[?&]app=1/.test(location.search); } })();
 function appBackButton(){
   if (!APP_MODE || $('#back-to-app')) return;
+  document.body.classList.add('in-admin-app');
   var hdr = $('.site-header .nav'); if (!hdr) return;
-  var a = document.createElement('a'); a.id = 'back-to-app'; a.className = 'btn ghost small-btn'; a.href = 'https://localhost/#me'; a.textContent = '\u2190 Back to app';
+  var a = document.createElement('a'); a.id = 'back-to-app'; a.className = 'btn ghost small-btn'; a.href = '/admin/app'; a.textContent = '\u2190 Admin home';
   hdr.insertBefore(a, hdr.firstChild);
-  // Android back button inside the app: go back to the app's own screens
-  try { var C = window.Capacitor; if (C && C.Plugins && C.Plugins.App && C.Plugins.App.addListener) C.Plugins.App.addListener('backButton', function(){ location.href = 'https://localhost/#me'; }); } catch(e){}
+  var logo = $('.site-header .logo'); if (logo) logo.setAttribute('href', '/admin/app');
+  // Android back button inside the Admin app: back to its home screen
+  try { var C = window.Capacitor; if (C && C.Plugins && C.Plugins.App && C.Plugins.App.addListener) C.Plugins.App.addListener('backButton', function(){ location.href = '/admin/app'; }); } catch(e){}
 }
 function pinStep(root, challenge, done){
   root.innerHTML = '<form class="auth-card" id="pin-form" novalidate><span class="eyebrow">Owner sign in</span><h1>Enter your PIN</h1><p class="muted small">Second step: the 4\u20136 digit owner PIN you set in Security.</p>' +
@@ -683,12 +688,6 @@ function pinStep(root, challenge, done){
     '<div class="form-alert hidden" role="alert"></div><button class="btn block" type="submit">Continue</button></form>';
   var f = $('#pin-form', root); f.pin.focus();
   wireForm(f, {pin: function(v){ return /^\d{4,6}$/.test(v) ? '' : 'Enter 4 to 6 digits.'; }}, function(){ return api('POST', '/api/auth/admin-pin', {challenge: challenge, pin: f.pin.value}); }, done);
-}
-function handoffPage(root){
-  var code = location.hash.slice(1); history.replaceState(null, '', '/admin/handoff');
-  if (!code) { root.innerHTML = '<div class="auth-card"><h1>Sign-in link missing</h1><p class="muted">Open the owner area again from the app.</p><a class="btn block" href="/admin">Owner sign in</a></div>'; return; }
-  api('POST', '/api/admin/handoff', {code: code}).then(function(){ try { sessionStorage.setItem('avm_admin_app', '1'); } catch(e){} location.replace('/admin?app=1'); },
-    function(err){ root.innerHTML = '<div class="auth-card"><span class="eyebrow">Owner sign in</span><h1>Link expired</h1><p class="muted">' + esc(err.message) + '</p><a class="btn block" href="https://localhost/#me">Back to the app</a></div>'; });
 }
 var D5 = null, DS = null;     // D5 = design being edited, DS = server state
 var COLOR_LABEL = {primary: 'Brand colour', accent: 'Accent (gold / highlights)', background: 'Background', text: 'Text', secondary: 'Secondary', surface: 'Cards / boxes', button_bg: 'Buttons', button_text: 'Button text', link: 'Links',
@@ -902,13 +901,12 @@ function boot(){
   offline();
   var root = $('#admin-root'), setup = $('#setup-root');
   if (setup) return setupPage(setup);
-  if (location.pathname === '/admin/handoff' && root) return handoffPage(root);
   appBackButton();
   if (!root) return;
   api('GET', '/api/admin/me').then(function(){ dashboard(root); }, function(err){
     if (err.status !== 403) { root.innerHTML = errorBox(err, true); $('[data-retry]', root).addEventListener('click', boot); return; }
     $('#admin-logout').classList.add('hidden');
-    api('GET', '/api/admin/setup-status').then(function(s){ loginView(root, s.setup_open); }, function(e){ root.innerHTML = errorBox(e, true); $('[data-retry]', root).addEventListener('click', boot); });
+    api('GET', '/api/admin/setup-status').then(function(s){ if (APP_MODE && !s.setup_open) { location.replace('/admin/app'); return; } loginView(root, s.setup_open); }, function(e){ root.innerHTML = errorBox(e, true); $('[data-retry]', root).addEventListener('click', boot); });
   });
 }
 document.addEventListener('DOMContentLoaded', function(){

@@ -1,0 +1,14 @@
+{
+ "name": "avermontis-admin-app",
+ "version": "6.0.0",
+ "private": true,
+ "description": "Avermontis Admin: the store owner's Android app (opens /admin/app on the live store).",
+ "dependencies": {
+  "@capacitor/android": "^7.6.10",
+  "@capacitor/app": "^7.1.2",
+  "@capacitor/cli": "^7.6.10",
+  "@capacitor/core": "^7.6.10",
+  "@capacitor/splash-screen": "^7.0.5",
+  "@capacitor/status-bar": "^7.0.6"
+ }
+}

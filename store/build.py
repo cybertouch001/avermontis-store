@@ -119,7 +119,7 @@ FOOT = f"""
  <a href="/account" data-tab="account">{ICON['user'].replace('width="20" height="20"', 'width="23" height="23"')}<span>Account</span></a>
 </nav>
 <script src="/products.js"></script>
-<script src="/assets/app.js?v=5.0.0"></script>
+<script src="/assets/app.js?v=6.0.0"></script>
 <script src="/assets/pwa.js"></script>
 """
 

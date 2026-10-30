@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="avm_obsidian">#0E1311</color>
+    <color name="avm_gold">#D3B47A</color>
+    <color name="avm_admin_green">#1E7B52</color>
+    <color name="colorPrimary">#0E1311</color>
+    <color name="colorPrimaryDark">#0E1311</color>
+    <color name="colorAccent">#1E7B52</color>
+</resources>

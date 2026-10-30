@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.webkit.WebView;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -17,6 +18,20 @@ import com.getcapacitor.annotation.CapacitorPlugin;
    - setIcon / getIcon: switches the launcher icon between the bundled designs (activity aliases) */
 @CapacitorPlugin(name = "AvmNative")
 public class AvmNativePlugin extends Plugin {
+    /* v6: the customer app has no owner area. Any navigation to the owner pages or owner APIs (on the store site or the
+       app's own origin) is refused and the app goes back to its store home screen; nothing opens in a browser either. */
+    @Override
+    public Boolean shouldOverrideLoad(Uri url) {
+        if (url == null) return null;
+        if (!OwnerUrlRule.isOwnerUrl(url.getScheme(), url.getHost(), url.getPath())) return null;
+        final WebView wv = getBridge() != null ? getBridge().getWebView() : null;
+        if (wv != null) {
+            final String home = getBridge().getAppUrl();
+            wv.post(new Runnable() { public void run() { wv.loadUrl(home); } });
+        }
+        return Boolean.TRUE;
+    }
+
     private static final String[] ICONS = { "avr", "avr_gold", "avr_green", "classic" };
     private static final String[] ALIASES = { ".MainActivity", ".IconAvrGold", ".IconAvrGreen", ".IconClassic" };
 

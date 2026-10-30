@@ -1,4 +1,4 @@
-// v5 (Oct 2026): owner login from the normal login (username admin), admin security, design studio, versions, audit log.
+// v5/v6 (Oct 2026): owner login (v6: Admin app screen or /admin only, never the customer login), admin security, design studio, versions, audit log.
 // Same harness as worker.test.js: the real _worker.js against an in-memory SQLite database that behaves like D1.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -66,49 +66,68 @@ test.before(async () => {
   const r = await a.call('POST', '/api/admin/setup', { password: OWNER_PW, confirm: OWNER_PW });
   assert.strictEqual(r.status, 201, JSON.stringify(r.body));
 });
+// v6: the owner signs in through the Admin app's screen (username + password) or the old /admin page (password)
 async function ownerViaNormalLogin(ip) {
   const c = client(ip);
-  const r = await c.call('POST', '/api/auth/login', { email: 'Admin', password: OWNER_PW });
+  const r = await c.call('POST', '/api/admin/login', { username: 'Admin', password: OWNER_PW, app: 'admin' });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-  assert.strictEqual(r.body.admin, true); assert.strictEqual(r.body.redirect, '/admin');
+  assert.strictEqual(r.body.admin, true); assert.strictEqual(r.body.redirect, '/admin/app');
   assert.ok(c.jar.av_admin, 'owner cookie set'); assert.ok(!c.jar.av_sess, 'no customer cookie');
   assert.match(r.setCookie, /HttpOnly; Secure; SameSite=Lax/);
   return c;
 }
 
-test('normal login: username "admin" (any case) + the existing owner password opens the owner area; same hash, nothing reset', async () => {
+
+test('v6: owner sign-in (admin app screen + old /admin page) with the existing owner password; same hash, nothing reset', async () => {
   const before = env.DB._db.prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'").get().value;
   const c = await ownerViaNormalLogin();
   let r = await c.call('GET', '/api/admin/me'); assert.strictEqual(r.status, 200);
   r = await c.call('GET', '/api/admin/stats'); assert.strictEqual(r.status, 200);
-  const c2 = client(); r = await c2.call('POST', '/api/auth/login', { username: '  ADMIN ', password: OWNER_PW }); assert.strictEqual(r.status, 200);
+  const c2 = client(); r = await c2.call('POST', '/api/admin/login', { username: '  ADMIN ', password: OWNER_PW }); assert.strictEqual(r.status, 200); assert.strictEqual(r.body.redirect, '/admin');
   assert.strictEqual(env.DB._db.prepare("SELECT value FROM settings WHERE key = 'admin_password_hash'").get().value, before);
-  // the old /admin page still works with the same password
+  // the old /admin page still works with the same password (no username field)
   const c3 = client(); r = await c3.call('POST', '/api/admin/login', { password: OWNER_PW }); assert.strictEqual(r.status, 200); assert.ok(c3.jar.av_admin);
-  // login history records the owner sign-in
   r = await c.call('GET', '/api/admin/security'); assert.strictEqual(r.status, 200);
   assert.ok(r.body.logins.some((l) => l.success)); assert.strictEqual(r.body.security.username, 'admin');
 });
 
-test('wrong owner password: same generic message as a customer typo, and 5 wrong tries lock that device for 15 minutes', async () => {
+test('v6: the normal customer login no longer opens the owner area - "admin" gets the same generic error as any wrong login', async () => {
   const cust = client();
   await cust.call('POST', '/api/auth/signup', { name: 'Riya Shah', email: 'riya5@example.com', password: 'Customer123' });
   const k = client(); let r = await k.call('POST', '/api/auth/login', { email: 'riya5@example.com', password: 'nopenope1' });
   assert.strictEqual(r.status, 401); const generic = r.body.error.message;
-  const bad = client('10.9.9.9');
-  for (let i = 0; i < 5; i++) {
-    r = await bad.call('POST', '/api/auth/login', { email: 'admin', password: 'wrong-' + i });
-    assert.strictEqual(r.status, 401, 'try ' + i); assert.strictEqual(r.body.error.message, generic, 'no hint that admin exists');
+  for (const body of [{ email: 'admin', password: OWNER_PW }, { email: 'Admin', password: OWNER_PW }, { username: ' ADMIN ', password: OWNER_PW }, { email: 'admin', password: 'wrong' }, { email: 'somebody', password: 'x1234567' }]) {
+    const c = client();
+    r = await c.call('POST', '/api/auth/login', body);
+    assert.strictEqual(r.status, 401, JSON.stringify(body)); assert.strictEqual(r.body.error.message, generic, 'same words as a customer typo');
+    assert.ok(!c.jar.av_admin && !c.jar.av_sess, 'no cookie at all'); assert.ok(!r.body.admin && !r.body.step && !r.body.handoff && !r.body.redirect);
   }
-  r = await bad.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW });
+  // the app (origin https://localhost) gets the same answer and no token
+  r = await client().call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW }, { origin: 'https://localhost' });
+  assert.strictEqual(r.status, 401); assert.strictEqual(r.body.error.message, generic); assert.ok(!r.body.token && !r.body.handoff);
+  // trying "admin" on the customer login does not lock the owner out
+  const bad = client('10.9.9.8');
+  for (let i = 0; i < 6; i++) await bad.call('POST', '/api/auth/login', { email: 'admin', password: 'wrong-' + i });
+  r = await bad.call('POST', '/api/admin/login', { username: 'admin', password: OWNER_PW }); assert.strictEqual(r.status, 200);
+});
+
+test('wrong owner password: generic message, and 5 wrong tries (password or username) lock that device for 15 minutes', async () => {
+  const generic = 'Username/email or password is incorrect.';
+  const bad = client('10.9.9.9');
+  let r;
+  for (let i = 0; i < 5; i++) {
+    r = await bad.call('POST', '/api/admin/login', i === 4 ? { username: 'owner', password: OWNER_PW } : { username: 'admin', password: 'wrong-' + i });
+    assert.strictEqual(r.status, 401, 'try ' + i); assert.strictEqual(r.body.error.message, generic, 'no hint');
+  }
+  r = await bad.call('POST', '/api/admin/login', { username: 'admin', password: OWNER_PW });
   assert.strictEqual(r.status, 429); assert.match(r.body.error.message, /locked for 15 minutes/);
   r = await bad.call('POST', '/api/admin/login', { password: OWNER_PW }); assert.strictEqual(r.status, 429, 'the old page shares the lock');
   // another device is not locked out by this one
   await ownerViaNormalLogin('10.9.9.10');
   // a successful login clears that device's counter
   const g = client('10.9.9.11');
-  for (let i = 0; i < 3; i++) await g.call('POST', '/api/auth/login', { email: 'admin', password: 'x' + i });
-  r = await g.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW }); assert.strictEqual(r.status, 200);
+  for (let i = 0; i < 3; i++) await g.call('POST', '/api/admin/login', { username: 'admin', password: 'x' + i });
+  r = await g.call('POST', '/api/admin/login', { username: 'admin', password: OWNER_PW }); assert.strictEqual(r.status, 200);
   assert.strictEqual(env.DB._db.prepare("SELECT COUNT(*) AS n FROM rate_limits WHERE key = 'adminfail:10.9.9.11'").get().n, 0);
 });
 
@@ -119,34 +138,28 @@ test('customers can never become admin: reserved names, bearer tokens, customer 
     assert.strictEqual(r.status, 400, name); assert.match(r.body.error.fields.name, /reserved/);
   }
   let r = await c.call('POST', '/api/auth/signup', { name: 'Adarsh Mehta', email: 'adarsh5@example.com', password: 'Customer123' }); assert.strictEqual(r.status, 201, 'normal names still fine');
-  for (const p of ['/api/admin/me', '/api/admin/design', '/api/admin/security', '/api/admin/audit']) { r = await c.call('GET', p); assert.strictEqual(r.status, 403, p); }
+  for (const p of ['/api/admin/me', '/api/admin/design', '/api/admin/security', '/api/admin/audit', '/api/admin/app/summary']) { r = await c.call('GET', p); assert.strictEqual(r.status, 403, p); }
   r = await c.call('PUT', '/api/admin/design/draft', { theme: { primary: '#111111' } }); assert.strictEqual(r.status, 403);
   // the app: a customer bearer token never opens owner routes
   const app = client();
   r = await app.call('POST', '/api/auth/login', { email: 'adarsh5@example.com', password: 'Customer123' }, { origin: 'https://localhost' });
   assert.ok(r.body.token);
   r = await app.call('GET', '/api/admin/design', undefined, { origin: 'https://localhost', headers: { authorization: 'Bearer ' + r.body.token }, noCookies: true }); assert.strictEqual(r.status, 403);
-  // look-alike usernames are not the owner
-  for (const u of ['adm1n', 'administrator', 'admin2', '\u0430dmin']) { r = await client().call('POST', '/api/auth/login', { email: u, password: OWNER_PW }); assert.strictEqual(r.status, 400, u); }
+  // look-alike usernames on the owner screen are not the owner
+  for (const u of ['adm1n', 'administrator', 'admin2', '\u0430dmin']) { r = await client().call('POST', '/api/admin/login', { username: u, password: OWNER_PW }); assert.strictEqual(r.status, 401, u); }
   // customer APIs never carry owner settings
   r = await client().call('GET', '/api/config'); const s = JSON.stringify(r.body);
-  assert.ok(!/admin_password|pin_hash|admin_security|secret:/.test(s));
+  assert.ok(!/admin_password|pin_hash|admin_security|admin_alert_keys|secret:/.test(s));
 });
 
-test('app login: owner gets a one-time code (no bearer token), the site swaps it once for the owner cookie', async () => {
+test('v6: the customer app cannot reach any owner API or hand-off; /admin/handoff is retired', async () => {
   const app = client();
-  let r = await app.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW }, { origin: 'https://localhost' });
-  assert.strictEqual(r.status, 200); assert.ok(r.body.handoff); assert.ok(!r.body.token, 'no bearer token for the owner'); assert.ok(!r.setCookie, 'no cookie cross-site');
-  assert.strictEqual(r.headers.get('access-control-allow-origin'), 'https://localhost');
-  assert.match(r.body.open, /^\/admin\/handoff#/);
-  const web = client();
-  r = await web.call('POST', '/api/admin/handoff', { code: r.body.handoff.slice(0, 10) + 'x'.repeat(r.body.handoff.length - 10) }); assert.strictEqual(r.status, 401);
-  const app2 = client(); r = await app2.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW }, { origin: 'https://localhost' }); const code = r.body.handoff;
-  r = await web.call('POST', '/api/admin/handoff', { code }, { origin: 'https://localhost' }); assert.strictEqual(r.status, 403, 'only the site page can swap it');
-  r = await web.call('POST', '/api/admin/handoff', { code }); assert.strictEqual(r.status, 200); assert.ok(web.jar.av_admin);
-  r = await web.call('GET', '/api/admin/me'); assert.strictEqual(r.status, 200);
-  r = await client().call('POST', '/api/admin/handoff', { code }); assert.strictEqual(r.status, 401, 'single use');
-  r = await web.call('GET', '/admin/handoff'); assert.strictEqual(r.status, 200); assert.match(r.body, /Owner sign in/); assert.strictEqual(r.headers.get('x-frame-options'), 'DENY');
+  for (const [m, p, b] of [['POST', '/api/admin/login', { username: 'admin', password: OWNER_PW }], ['POST', '/api/auth/admin-pin', { challenge: 'x', pin: '1234' }], ['POST', '/api/admin/handoff', { code: 'abc' }], ['GET', '/api/admin/me'], ['GET', '/api/admin/app/summary']]) {
+    const r = await app.call(m, p, b, { origin: 'https://localhost' });
+    assert.strictEqual(r.status, 403, p); assert.ok(!r.setCookie, 'no cookie for ' + p);
+  }
+  let r = await client().call('POST', '/api/admin/handoff', { code: 'abcdefghijklmnopqrstuvwxyz' }); assert.strictEqual(r.status, 410);
+  r = await client().call('GET', '/admin/handoff'); assert.strictEqual(r.status, 302); assert.match(r.headers.get('location'), /\/admin$/);
 });
 
 test('owner PIN (optional second step), idle timeout, sign out everywhere, password change keeps working', async () => {
@@ -156,7 +169,7 @@ test('owner PIN (optional second step), idle timeout, sign out everywhere, passw
   r = await o.call('PUT', '/api/admin/security', { pin_enabled: true, pin: '4826', current_password: OWNER_PW, idle_minutes: 15 }); assert.strictEqual(r.status, 200);
   assert.strictEqual(r.body.security.pin_enabled, true); assert.strictEqual(r.body.security.idle_minutes, 15);
   const c = client();
-  r = await c.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW });
+  r = await c.call('POST', '/api/admin/login', { username: 'admin', password: OWNER_PW, app: 'admin' });
   assert.strictEqual(r.status, 200); assert.strictEqual(r.body.step, 'pin'); assert.ok(!c.jar.av_admin, 'no session before the PIN');
   const ch = r.body.challenge;
   r = await c.call('POST', '/api/auth/admin-pin', { challenge: ch, pin: '0000' }); assert.strictEqual(r.status, 401);
@@ -165,7 +178,7 @@ test('owner PIN (optional second step), idle timeout, sign out everywhere, passw
   env.DB._db.prepare("UPDATE sessions SET last_seen_at = ? WHERE kind = 'admin'").run(new Date(Date.now() - 16 * 60000).toISOString());
   r = await c.call('GET', '/api/admin/me'); assert.strictEqual(r.status, 403);
   // PIN off again, new sessions, then sign out everywhere
-  const a = client(); r = await a.call('POST', '/api/auth/login', { email: 'admin', password: OWNER_PW }); r = await a.call('POST', '/api/auth/admin-pin', { challenge: r.body.challenge, pin: '4826' });
+  const a = client(); r = await a.call('POST', '/api/admin/login', { username: 'admin', password: OWNER_PW }); r = await a.call('POST', '/api/auth/admin-pin', { challenge: r.body.challenge, pin: '4826' });
   r = await a.call('PUT', '/api/admin/security', { pin_enabled: false, current_password: OWNER_PW, idle_minutes: 30 }); assert.strictEqual(r.status, 200); assert.strictEqual(r.body.security.pin_enabled, false);
   const b = await ownerViaNormalLogin();
   r = await b.call('GET', '/api/admin/security'); assert.ok(r.body.sessions.length >= 2);
@@ -240,9 +253,11 @@ test('design studio: version history, undo, restore, reset to default, export/im
   r = await client().call('GET', '/api/admin/audit'); assert.strictEqual(r.status, 403);
 });
 
-test('app (v5 client): admin from the normal sign-in, server look applied, bottom bar; website login takes a username', () => {
+test('app (v6 client): no owner entry at all in the customer app or the website login; server look applied; full admin kept', () => {
   const app = fs.readFileSync(path.join(SITE, 'assets/m/app.js'), 'utf8');
-  assert.match(app, /APP_VERSION = '5\.0\.0'/); assert.match(app, /app_css/); assert.match(app, /handoff/); assert.match(app, /Email or username/);
-  const login = fs.readFileSync(path.join(SITE, '_pages/login.html'), 'utf8'); assert.match(login, /Email or username/); assert.ok(!/id="login-email" name="email" type="email"/.test(login));
-  const adm = fs.readFileSync(path.join(SITE, 'assets/admin.js'), 'utf8'); assert.match(adm, /designTab/); assert.match(adm, /securityTab/); assert.match(adm, /auditTab/);
+  assert.match(app, /APP_VERSION = '6\.0\.0'/); assert.match(app, /app_css/);
+  assert.ok(!/admin\/handoff|Store owner\?|ownerSignedIn|admin-pin|data-act="owner"|Email or username|\/admin['"]/.test(app), 'no owner sign-in, menu or /admin link in the customer app');
+  const login = fs.readFileSync(path.join(SITE, '_pages/login.html'), 'utf8'); assert.ok(!/username|admin/i.test(login.replace(/autocomplete="username"/, '')), 'website login says Email only');
+  const web = fs.readFileSync(path.join(SITE, 'assets/app.js'), 'utf8'); assert.ok(!/ownerPin|admin-pin|r\.admin/.test(web), 'website login never sends anyone to /admin');
+  const adm = fs.readFileSync(path.join(SITE, 'assets/admin.js'), 'utf8'); assert.match(adm, /designTab/); assert.match(adm, /securityTab/); assert.match(adm, /auditTab/); assert.ok(!/localhost/.test(adm), 'no way back into the customer app');
 });

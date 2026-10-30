@@ -444,7 +444,7 @@ async function createSession(env, request, kind, userId) {
   ]);
   return setCookie(cookieName(kind), token, maxAge);
 }
-async function getSession(env, request, kind) {
+async function getSession(env, request, kind, opts) {
   // customer sessions: the app sends its token as a bearer header; the website uses the HttpOnly cookie
   const token = (kind === 'customer' && bearerToken(request)) || readCookie(request, cookieName(kind));
   if (!token || token.length > 100 || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
@@ -455,7 +455,7 @@ async function getSession(env, request, kind) {
     const sec = await adminSecurity(env).catch(() => ({ idle_minutes: ADMIN_IDLE_DEFAULT_MIN }));
     const last = Date.parse(s.last_seen_at || s.created_at), now = Date.now();
     if (now - last > sec.idle_minutes * 60000) { await env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(s.id).run(); return null; }
-    if (now - last > 60000 && 'last_seen_at' in s) await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date(now).toISOString(), s.id).run();
+    if (!(opts && opts.noTouch) && now - last > 60000 && 'last_seen_at' in s) await env.DB.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').bind(new Date(now).toISOString(), s.id).run();
   }
   return { id: s.id, kind: s.kind, user_id: s.user_id, expires_at: s.expires_at };
 }
@@ -469,8 +469,8 @@ async function requireUser(env, request) {
   if (!u) throw new HttpError(401, 'not_signed_in', 'Please sign in first.');
   return u;
 }
-async function requireAdmin(env, request) {
-  const s = await getSession(env, request, 'admin');
+async function requireAdmin(env, request, opts) {
+  const s = await getSession(env, request, 'admin', opts);
   if (!s) throw new HttpError(403, 'forbidden', 'Owner access only.');
   return s;
 }
@@ -898,9 +898,14 @@ async function adminOrdersV2(request, env, url) {
   const { limit, offset } = pageArgs(url);
   const status = url.searchParams.get('status') || '';
   if (status && !ORDER_STATUSES.includes(status)) throw new HttpError(400, 'invalid_input', 'Unknown status filter.');
-  const where = status ? 'WHERE o.status = ?' : '';
+  // v6: search (order id, name, phone, e-mail, city, pincode) for the Admin app
+  const search = String(url.searchParams.get('q') || '').trim().slice(0, 60);
+  const conds = [], args = [];
+  if (status) { conds.push('o.status = ?'); args.push(status); }
+  if (search) { const like = '%' + search.replace(/[%_\\]/g, (c) => '\\' + c) + '%'; conds.push("(o.id LIKE ? ESCAPE '\\' OR o.name LIKE ? ESCAPE '\\' OR o.phone LIKE ? ESCAPE '\\' OR o.email LIKE ? ESCAPE '\\' OR o.city LIKE ? ESCAPE '\\' OR o.pincode LIKE ? ESCAPE '\\')"); args.push(like, like, like, like, like, like); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const q = env.DB.prepare(`SELECT o.*, u.email AS account_email FROM orders o LEFT JOIN users u ON u.id = o.user_id ${where} ORDER BY o.created_at DESC LIMIT ? OFFSET ?`);
-  const rows = (await (status ? q.bind(status, limit, offset) : q.bind(limit, offset)).all()).results;
+  const rows = (await q.bind(...args, limit, offset).all()).results;
   const items = await loadItems(env, rows.map((r) => r.id));
   const origin = new URL(request.url).origin;
   return json(200, { ok: true, orders: rows.map((r) => ({ ...shapeOrderV2(r, items[r.id], true, origin), mail: orderMailDraft(origin, r, items[r.id] || [], r.status === 'new' ? 'received' : r.status === 'confirmed' ? 'confirmed' : 'update') })), limit, offset });
@@ -1809,7 +1814,8 @@ function withHeaders(res, url) {
     if (h.get('Content-Security-Policy')) h.set('Content-Security-Policy', h.get('Content-Security-Policy').replace("frame-ancestors 'self'", "frame-ancestors 'none'"));
   }
   if (/^\/(admin|account|login|signup|reset|forgot|checkout|order-success|track)/.test(url.pathname)) { h.set('Cache-Control', 'no-store'); }
-  if (/^\/(admin|account|reset|forgot|order-success)/.test(url.pathname)) h.set('X-Robots-Tag', 'noindex, nofollow');
+  if (/^\/(admin|account|reset|forgot|order-success|download\/admin)/.test(url.pathname)) h.set('X-Robots-Tag', 'noindex, nofollow');
+  if (/^\/download\/admin/.test(url.pathname)) h.set('Cache-Control', 'no-store');
   if (/^\/(assets|img|icons)\//.test(url.pathname) && !/\.html$/.test(url.pathname)) h.set('Cache-Control', 'public, max-age=86400');
   // v4 AR files are also loaded by the installed app (its pages run from the phone, a different origin)
   if (/^\/assets\/ar\//.test(url.pathname)) {
@@ -1831,7 +1837,8 @@ export default {
     if (url.pathname.startsWith('/api/')) {
       if (isAppRequest(request)) {
         if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
-        const res = await handleApi(request, env, url, ctx);
+        // v6: the customer app has no owner area at all - every owner API answers "not found" to it
+        const res = /^\/api\/(admin(\/|$)|auth\/admin)/.test(url.pathname) ? fail(403, 'forbidden', 'Owner access only.') : await handleApi(request, env, url, ctx);
         const h = new Headers(res.headers); for (const [k, v] of Object.entries(corsHeaders(request))) h.set(k, v);
         return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
       }
@@ -1863,6 +1870,16 @@ export default {
         return new Response(f.body, { status: 200, headers: h });
       }
     }
+    // v6: the owner's "Avermontis Admin" app - a separate, unlisted download (the page is noindex and linked from nowhere)
+    if (url.pathname === '/download/avermontis-admin.apk' && (request.method === 'GET' || request.method === 'HEAD')) {
+      const f = await env.ASSETS.fetch(new Request(url.origin + '/_dl/avermontis-admin.apk', { method: request.method }));
+      if (f.status === 200) {
+        const h = new Headers(f.headers); h.set('Content-Type', 'application/vnd.android.package-archive');
+        h.set('Content-Disposition', 'attachment; filename="Avermontis-Admin.apk"'); h.set('Cache-Control', 'no-cache'); h.set('X-Robots-Tag', 'noindex, nofollow');
+        for (const [k, v] of Object.entries(SEC_HEADERS)) h.set(k, v);
+        return new Response(f.body, { status: 200, headers: h });
+      }
+    }
     if (url.pathname === '/sitemap.xml') { try { return await sitemap(request, env); } catch { return new Response('', { status: 503 }); } }
     let m = url.pathname.match(/^\/invoice\/([A-Za-z0-9-]{6,30})$/);
     if (m) { try { return await invoicePage(request, env, m[1].toUpperCase()); } catch { return new Response('Something went wrong. Please try again.', { status: 500, headers: htmlHeaders() }); } }
@@ -1870,6 +1887,7 @@ export default {
     if (m) { const r = await serveMediaV4(request, env, m[1]).catch(() => null); if (r) return r; }
     if (url.pathname === '/manifest.webmanifest' && request.method === 'GET') { const r = await manifestV4(request, env).catch(() => null); if (r) return withHeaders(r, url); }
     if (url.pathname === '/admin/' || url.pathname === '/admin/index.html') return Response.redirect(url.origin + '/admin', 301);
+    if (url.pathname === '/admin/handoff') return Response.redirect(url.origin + '/admin', 302);   // v6: hand-off retired
     // HTML pages live in /_pages/ so every page passes through here and gets the security headers.
     let res, isPage = false;
     let name = url.pathname.replace(/\.html$/, '');
@@ -3078,12 +3096,10 @@ async function takeAdminToken(env, kind, token) {
 async function adminGrant(env, request) {
   await adminClear(env, request);
   await logAttempt(env, request, { email: 'admin', kind: 'admin', event: 'admin_login', success: true });
-  if (isAppRequest(request)) {
-    const code = await newAdminToken(env, request, 'handoff', 120);
-    return json(200, { ok: true, admin: true, handoff: code, open: '/admin/handoff#' + code });
-  }
+  // v6: never from the customer app (its requests are refused before they get here); no hand-off codes any more
+  if (isAppRequest(request)) throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR);
   const cookie = await createSession(env, request, 'admin', null);
-  return json(200, { ok: true, admin: true, redirect: '/admin' }, { 'Set-Cookie': cookie });
+  return json(200, { ok: true, admin: true, redirect: request.__adminApp ? '/admin/app' : '/admin' }, { 'Set-Cookie': cookie });
 }
 async function adminPasswordStep(env, request, password) {
   await adminLockCheck(env, request);
@@ -3103,6 +3119,7 @@ async function adminPasswordStep(env, request, password) {
 async function adminPinStep(request, env) {
   const b = await readJson(request);
   await adminLockCheck(env, request);
+  if (b.app === 'admin') request.__adminApp = true;
   const row = await takeAdminToken(env, 'pin', b.challenge);
   if (!row) throw new HttpError(401, 'pin_expired', 'That sign-in has expired. Please enter your username and password again.');
   const sec = await adminSecurity(env);
@@ -3116,23 +3133,24 @@ async function adminPinStep(request, env) {
   await env.DB.prepare('UPDATE admin_tokens SET used = 1 WHERE id = ?').bind(row.id).run();
   return adminGrant(env, request);
 }
+// v6: the customer app no longer opens the owner area, so the one-time hand-off is gone for good
 async function adminHandoff(request, env) {
-  const b = await readJson(request);
-  if (isAppRequest(request)) throw new HttpError(403, 'forbidden', 'Open this on the store website.');
-  const row = await takeAdminToken(env, 'handoff', b.code);
-  if (!row) throw new HttpError(401, 'handoff_expired', 'This sign-in link has expired. Please sign in again from the app.');
-  await env.DB.prepare('UPDATE admin_tokens SET used = 1 WHERE id = ?').bind(row.id).run();
-  const cookie = await createSession(env, request, 'admin', null);
-  return json(200, { ok: true, admin: true, redirect: '/admin?app=1' }, { 'Set-Cookie': cookie });
+  throw new HttpError(410, 'gone', 'Owner sign-in has moved to the Avermontis Admin app.');
 }
-// POST /api/auth/login : customers sign in with email + password; the owner with username "admin" + owner password
+// POST /api/auth/login : customers sign in with email + password.
+// v6: the owner can NOT sign in here any more (website or app). "admin" - like any other username that is not an
+// e-mail address - gets exactly the same answer as a wrong password, so nothing hints that an owner account exists.
+// The owner signs in on /admin (laptop browser) or in the separate "Avermontis Admin" app (/admin/app).
 async function loginV5(request, env) {
   const body = await readJson(request);
   await rateLimit(env, 'auth', clientIp(request), AUTH_LIMIT, AUTH_WINDOW_S);
   const ident = typeof body.username === 'string' && !body.email ? body.username : body.email;
-  if (isAdminIdentifier(ident)) return adminPasswordStep(env, request, body.password);
+  if (typeof ident === 'string' && ident.trim() && !ident.includes('@') && ident.length <= 254) {
+    await dummyVerify(typeof body.password === 'string' && body.password ? body.password.slice(0, 128) : 'x');
+    await logAttempt(env, request, { email: ident.trim().slice(0, 60), kind: 'customer', event: 'login', success: false, reason: 'no_account' });
+    throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR);
+  }
   const { value, fields } = validateLogin({ email: ident, password: body.password });
-  if (fields.email && typeof ident === 'string' && ident.trim() && !ident.includes('@')) fields.email = 'Enter your email address (or the owner username).';
   assertValid(fields);
   const u = await env.DB.prepare('SELECT id, email, name, password_hash FROM users WHERE email = ?').bind(value.email).first();
   let ok = false;
@@ -3151,6 +3169,15 @@ async function adminLoginV5(request, env) {
   const body = await readJson(request);
   const row = await env.DB.prepare("SELECT 1 AS x FROM settings WHERE key = 'admin_password_hash'").first();
   if (!row) throw new HttpError(409, 'setup_required', 'The owner password has not been created yet. Open /admin/setup first.');
+  // v6: the Admin app's sign-in screen sends a username too; anything but "admin" is a failed owner attempt
+  // (counts towards the 5-try lock, same generic message)
+  if (body.username !== undefined && !isAdminIdentifier(body.username)) {
+    await adminLockCheck(env, request);
+    await dummyVerify(typeof body.password === 'string' && body.password ? body.password.slice(0, 128) : 'x');
+    await adminFail(env, request, 'wrong_username');
+    throw new HttpError(401, 'invalid_credentials', GENERIC_LOGIN_ERROR);
+  }
+  if (body.app === 'admin') request.__adminApp = true;
   return adminPasswordStep(env, request, body.password);
 }
 
@@ -3203,6 +3230,7 @@ async function adminPutSecurity(request, env) {
     // a new password signs out every other owner session
     const cur = await getSession(env, request, 'admin');
     await env.DB.prepare("DELETE FROM sessions WHERE kind = 'admin' AND id != ?").bind(cur ? cur.id : '').run();
+    await settingPut(env, 'admin_alert_keys', '[]');
   }
   request.__audit = changed.join(', ') || 'no change';
   return adminGetSecurity(request, env);
@@ -3211,6 +3239,7 @@ async function adminLogoutAll(request, env) {
   await requireAdmin(env, request);
   checkOrigin(request);
   const r = await env.DB.prepare("DELETE FROM sessions WHERE kind = 'admin'").run();
+  await settingPut(env, 'admin_alert_keys', '[]');     // v6: background new-order checks stop too
   request.__audit = 'signed out of every device';
   return json(200, { ok: true, signed_out: r.meta ? r.meta.changes : null }, { 'Set-Cookie': setCookie(cookieName('admin'), '', 0) });
 }
@@ -3219,7 +3248,7 @@ async function adminLogoutAll(request, env) {
 const AUDIT_AREAS = [[/^\/api\/admin\/design/, 'Design'], [/^\/api\/admin\/ui/, 'Customize'], [/^\/api\/admin\/(security|logout-all)/, 'Security'], [/^\/api\/admin\/orders/, 'Orders'],
   [/^\/api\/admin\/products/, 'Products'], [/^\/api\/admin\/upload/, 'Uploads'], [/^\/api\/admin\/coupons/, 'Coupons'], [/^\/api\/admin\/reviews/, 'Reviews'], [/^\/api\/admin\/(customers|resets)/, 'Customers'],
   [/^\/api\/admin\/(messages|subscribers)/, 'Messages'], [/^\/api\/admin\/settings/, 'Settings'], [/^\/api\/admin\/(restore|backup)/, 'Backup'], [/^\/api\/admin\/notifications/, 'Notify'],
-  [/^\/api\/admin\/(bargains|chat)/, 'Assistant'], [/^\/api\/admin\/email/, 'Email']];
+  [/^\/api\/admin\/(bargains|chat)/, 'Assistant'], [/^\/api\/admin\/app/, 'Admin app'], [/^\/api\/admin\/email/, 'Email']];
 async function writeAudit(env, request, url, status) {
   try {
     const p = url.pathname; if (!/^\/api\/admin\//.test(p) || /\/(login|setup|handoff|ui-preview|design\/preview|chat-test|email-test)$/.test(p)) return;
@@ -3626,3 +3655,110 @@ const ROUTES_V5 = [
   ['DELETE', /^\/api\/admin\/design\/themes\/([a-z0-9-]{4,12})$/, (r, env, u, m) => adminDesignDeleteTheme(r, env, m[1])]
 ];
 ROUTES.push(...ROUTES_V5);
+
+// =====================================================================================================================
+// v6 (Oct 2026): the owner area leaves the customer app. The owner now uses the separate "Avermontis Admin" Android app
+// (it opens /admin/app on this site) or /admin in a laptop browser. Extra owner endpoints for that app:
+//   GET   /api/admin/app/summary?days=7|30  today's orders/revenue, open order counts, low stock, daily sales
+//   GET   /api/admin/app/pulse              new-order check for the open app; does NOT count as activity (idle sign-out still works)
+//   PATCH /api/admin/products/:id/quick     quick stock / price / on-off change from the phone
+//   POST  /api/admin/app/alert-key          a read-only key for the app's background new-order check (counts only, no names)
+//   DELETE /api/admin/app/alert-key         switch background checks off on every phone
+//   GET   /api/admin/app/peek               (header X-Alert-Key) how many new orders + time of the newest; nothing else
+// =====================================================================================================================
+const LOW_STOCK_AT = 5;
+async function adminAppSummary(request, env, url) {
+  await requireAdmin(env, request);
+  const days = url.searchParams.get('days') === '30' ? 30 : 7;
+  const today = istMidnightUtcIso();
+  const since = new Date(Date.parse(today) - (days - 1) * 86400000).toISOString();
+  const r = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN status != 'cancelled' THEN total ELSE 0 END),0) AS s FROM orders WHERE created_at >= ?").bind(today),
+    env.DB.prepare("SELECT status, COUNT(*) AS n FROM orders GROUP BY status"),
+    env.DB.prepare("SELECT id, name, stock, active FROM products WHERE active = 1 AND stock <= ? ORDER BY stock ASC, name LIMIT 20").bind(LOW_STOCK_AT),
+    env.DB.prepare("SELECT date(created_at, '+330 minutes') AS d, COUNT(*) AS n, COALESCE(SUM(total),0) AS s FROM orders WHERE status != 'cancelled' AND created_at >= ? GROUP BY d ORDER BY d").bind(since),
+    env.DB.prepare("SELECT id, created_at FROM orders ORDER BY created_at DESC LIMIT 1"),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE status = 'new'"),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM reviews WHERE status = 'pending'")
+  ]);
+  const by = Object.fromEntries(r[1].results.map((x) => [x.status, x.n]));
+  const map = Object.fromEntries(r[3].results.map((x) => [x.d, x]));
+  const series = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.parse(since) + 330 * 60000 + i * 86400000).toISOString().slice(0, 10);
+    series.push({ date: d, orders: map[d] ? map[d].n : 0, sales: map[d] ? map[d].s : 0 });
+  }
+  const latest = r[4].results[0] || null;
+  return json(200, { ok: true, summary: {
+    today: { orders: (r[0].results[0] || {}).n || 0, revenue: (r[0].results[0] || {}).s || 0 },
+    open: { new: by.new || 0, confirmed: by.confirmed || 0, shipped: by.shipped || 0 },
+    totals: { delivered: by.delivered || 0, cancelled: by.cancelled || 0, all: Object.values(by).reduce((a, b) => a + b, 0) },
+    period: { days, orders: series.reduce((a, x) => a + x.orders, 0), revenue: series.reduce((a, x) => a + x.sales, 0) },
+    series, low_stock_at: LOW_STOCK_AT, low_stock: r[2].results.map((p) => ({ id: p.id, name: p.name, stock: p.stock })),
+    latest_order: latest ? { id: latest.id, created_at: latest.created_at } : null,
+    new_messages: (r[5].results[0] || {}).n || 0, pending_reviews: (r[6].results[0] || {}).n || 0 } });
+}
+async function newOrderPulse(env) {
+  const r = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'new'"),
+    env.DB.prepare("SELECT id, created_at FROM orders ORDER BY created_at DESC LIMIT 1")
+  ]);
+  const latest = r[1].results[0] || null;
+  return { new_orders: (r[0].results[0] || {}).n || 0, latest_at: latest ? latest.created_at : null, latest_id: latest ? latest.id : null };
+}
+async function adminAppPulse(request, env) {
+  await requireAdmin(env, request, { noTouch: true });     // polling must not keep an idle owner signed in
+  return json(200, { ok: true, ...(await newOrderPulse(env)) });
+}
+async function adminQuickProduct(request, env, id) {
+  await requireAdmin(env, request);
+  const b = await readJson(request);
+  const p = await env.DB.prepare('SELECT id, name, price, stock, active FROM products WHERE id = ?').bind(id).first();
+  if (!p) throw new HttpError(404, 'not_found', 'Product not found.');
+  const f = {}, sets = [], args = [], changed = [];
+  if (b.stock !== undefined) { const n = Number(b.stock); if (!Number.isInteger(n) || n < 0 || n > 1000000) f.stock = 'Stock must be a whole number, 0 or more.'; else { sets.push('stock = ?'); args.push(n); changed.push('stock ' + p.stock + ' -> ' + n); } }
+  if (b.price !== undefined) { const n = Number(b.price); if (!Number.isInteger(n) || n < 1 || n > 10000000) f.price = 'Price must be a whole number of rupees, at least 1.'; else { sets.push('price = ?'); args.push(n); changed.push('price ' + p.price + ' -> ' + n); } }
+  if (b.active !== undefined) { if (typeof b.active !== 'boolean') f.active = 'On/off must be true or false.'; else { sets.push('active = ?'); args.push(b.active ? 1 : 0); changed.push(b.active ? 'shown in store' : 'hidden from store'); } }
+  assertValid(f);
+  if (!sets.length) throw new HttpError(400, 'invalid_input', 'Nothing to change.');
+  await env.DB.prepare('UPDATE products SET ' + sets.join(', ') + ', updated_at = ? WHERE id = ?').bind(...args, nowIso(), id).run();
+  request.__audit = p.name + ': ' + changed.join(', ');
+  const n = await env.DB.prepare('SELECT id, name, price, stock, active FROM products WHERE id = ?').bind(id).first();
+  return json(200, { ok: true, product: { id: n.id, name: n.name, price: n.price, stock: n.stock, active: !!n.active } });
+}
+async function alertKeys(env) { const v = jparse(await settingGet(env, 'admin_alert_keys'), null); return Array.isArray(v) ? v : []; }
+async function adminAlertKeyCreate(request, env) {
+  await requireAdmin(env, request);
+  checkOrigin(request);
+  const token = randToken(32);
+  const keys = (await alertKeys(env)).slice(-4);
+  keys.push({ h: await sha256hex(token), device: deviceFromUA(clientUA(request)), created_at: nowIso() });
+  await settingPut(env, 'admin_alert_keys', JSON.stringify(keys));
+  request.__audit = 'background new-order alerts switched on (' + deviceFromUA(clientUA(request)) + ')';
+  return json(200, { ok: true, key: token, note: 'This key can only read how many new orders there are. Sign out all devices or turn alerts off to cancel it.' });
+}
+async function adminAlertKeyRevoke(request, env) {
+  await requireAdmin(env, request);
+  checkOrigin(request);
+  await settingPut(env, 'admin_alert_keys', '[]');
+  request.__audit = 'background new-order alerts switched off on every phone';
+  return json(200, { ok: true });
+}
+async function adminAlertPeek(request, env) {
+  await rateLimit(env, 'peek', clientIp(request), 120, 3600);
+  const k = request.headers.get('x-alert-key') || '';
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(k)) throw new HttpError(403, 'forbidden', 'Owner access only.');
+  const h = await sha256hex(k);
+  if (!(await alertKeys(env)).some((x) => x.h === h)) throw new HttpError(403, 'forbidden', 'Owner access only.');
+  return json(200, { ok: true, ...(await newOrderPulse(env)) });
+}
+const ROUTES_V6 = [
+  ['GET', /^\/api\/admin\/app\/summary$/, adminAppSummary],
+  ['GET', /^\/api\/admin\/app\/pulse$/, adminAppPulse],
+  ['GET', /^\/api\/admin\/app\/peek$/, adminAlertPeek],
+  ['POST', /^\/api\/admin\/app\/alert-key$/, adminAlertKeyCreate],
+  ['DELETE', /^\/api\/admin\/app\/alert-key$/, adminAlertKeyRevoke],
+  ['PATCH', /^\/api\/admin\/products\/([A-Za-z0-9_-]{2,60})\/quick$/, (r, env, u, m) => adminQuickProduct(r, env, m[1])]
+];
+ROUTES.unshift(...ROUTES_V6);
+

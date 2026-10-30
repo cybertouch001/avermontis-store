@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en-IN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Avermontis Admin</title>
+<style>html,body{margin:0;background:#0E1311;color:#ECEDEA;font:15px/1.5 system-ui,-apple-system,Roboto,Arial,sans-serif}
+.w{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px;text-align:center;gap:12px}
+.m{width:64px;height:64px;border-radius:18px;background:#050706;color:#D3B47A;font:600 40px/64px Georgia,serif;position:relative}
+.m:after{content:"ADMIN";position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);background:#1E7B52;color:#fff;font:600 9px/1 system-ui,sans-serif;letter-spacing:.12em;padding:4px 6px;border-radius:6px}
+h1{font-size:20px;margin:18px 0 0}p{color:#9AA19C;margin:0;max-width:320px}
+button{margin-top:14px;border:0;border-radius:12px;background:#1E7B52;color:#fff;font-weight:600;font-size:15px;padding:12px 26px}</style></head>
+<body><div class="w"><div class="m">A</div><h1>No internet</h1><p>Avermontis Admin needs the internet to show your live orders and settings. Connect and try again.</p>
+<button id="r" type="button">Try again</button></div>
+<script>document.getElementById('r').addEventListener('click',function(){location.href='https://avermontis.sites.tab.bot/admin/app';});
+window.addEventListener('online',function(){location.href='https://avermontis.sites.tab.bot/admin/app';});</script></body></html>

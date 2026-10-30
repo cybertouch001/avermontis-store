@@ -1,4 +1,4 @@
-# AVERMONTIS store + Android app (v4)
+# AVERMONTIS store + Android apps (v6)
 
 This repo has the full code of the AVERMONTIS skincare store: the website, the admin panel, the server, and the Android app.
 
@@ -16,7 +16,8 @@ Admin panel: https://avermontis.sites.tab.bot/admin
   - `store/test/` – tests.
   - `store/tools/dev-server.mjs` – run the store on your own computer.
   - `store/site/assets/ar/` – AR: 3D bottle models, glow selfie, bottle scan.
-- `app/` – the native Android app (Capacitor 7). Package `bot.tab.sites.avermontis.twa`, version 4.0.0 (versionCode 4). See `app/README.md` for full details.
+- `app/` – the customer Android app (Capacitor 7). Package `bot.tab.sites.avermontis.twa`, version 6.0.0 (versionCode 6). See `app/README.md` for full details.
+- `admin-app/` – the separate owner app **Avermontis Admin** (Capacitor 7). Package `bot.tab.sites.avermontis.admin`, version 1.0.0. It opens the owner screens at `/admin/app`. See `admin-app/README.md`.
 
 ## Website: test, build, run
 
@@ -52,6 +53,8 @@ npx cap sync android
 cd android && ./gradlew assembleRelease bundleRelease
 ```
 
+Admin app: `cd admin-app && npm install && npx cap sync android && cd android && ./gradlew assembleRelease` (same keystore).
+
 Release signing reads a properties file kept OUTSIDE this repo (env `AVM_KEYSTORE_PROPS`). Use the SAME keystore as before, or phones won't accept the update.
 
 > Signing key (keystore) aur passwords is repo mein nahi hain, jaan-boojh ke. Unhe safe jagah rakho, GitHub pe kabhi mat daalna.
@@ -78,3 +81,18 @@ No keystore, no passwords, no `.apk` / `.aab` files, no `node_modules`, no build
   reset, export/import, contrast warnings. The Android app reads the published look at launch (no new APK needed).
 - Audit log of every owner change.
 - Tests: `cd store && node --test` (71); headless end-to-end: `node tools/e2e-server.mjs` + `python3 test/e2e_v5.py`.
+
+## v6.0.0 (Oct 30 2026)
+- Admin removed from the customer side: the normal sign-in (website and customer app) takes email only; `admin` there
+  gets the same generic "incorrect" error as any wrong login. No owner links or menus in the customer app; the app's
+  WebView refuses `/admin*` pages, and the server refuses every owner API from the app (403). "admin" stays reserved.
+- New separate app **Avermontis Admin** (`admin-app/`, package `bot.tab.sites.avermontis.admin`, own icon with ADMIN badge,
+  same signing key): username + password (+ optional PIN), same 5-try lockout and idle sign-out as v5.
+  Home dashboard (today's sales/orders, open orders, 7/30-day chart, low stock, messages/reviews), Orders (search,
+  status filter, one-tap New -> Confirmed/packed -> Shipped -> Delivered, call/WhatsApp the customer, invoice,
+  share invoice, cancel, CSV export), Stock (+/-, set stock, price, on/off), More (every v5 owner area incl. the Design
+  studio), new-order alerts (every minute while open; optional background check about every 15 min), dark mode, app
+  lock (fingerprint / screen lock or an app PIN).
+- Laptop: `/admin` in a normal browser still works with the owner password.
+- Admin APK download: `/download/admin` (unlisted, noindex).
+- Tests: `cd store && node --test` (78); end-to-end: `node tools/e2e-server.mjs` + `python3 test/e2e_v5.py` (26) and `python3 test/e2e_v6.py` (46).

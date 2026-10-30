@@ -470,20 +470,10 @@ function renderLogin(){
   var f = $('#login-form'); if (!f) return;
   me().then(function(u){ if (u) location.replace(nextUrl()); });
   var s = $('#to-signup'); if (s && qs('next')) s.href = '/signup?next=' + encodeURIComponent(qs('next'));
-  // v5: the owner signs in here too, with username "admin" and the owner password (then the owner PIN, if it is on)
-  wireForm(f, {email: function(v){ return /^admin$/i.test(String(v).trim()) ? '' : R.email(v); }, password: function(v){ return v ? '' : 'Enter your password.'; }}, function(){ return api('POST', '/api/auth/login', {email: f.email.value.trim(), password: f.password.value}); }, function(r){
-    if (r && r.step === 'pin') return ownerPin(f, r.challenge);
-    location.href = r && r.admin ? (r.redirect || '/admin') : nextUrl(); });
-}
-function ownerPin(f, challenge){
-  var card = f.closest('.auth-card') || f;
-  card.innerHTML = '<span class="eyebrow">Owner sign in</span><h1>Enter your PIN</h1><p class="muted small">Second step: your 4\u20136 digit owner PIN.</p>' +
-    '<div class="field"><label for="owner-pin">Owner PIN</label><input id="owner-pin" name="pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><p class="err" id="pin-err"></p></div>' +
-    '<button class="btn block" type="button" id="pin-go">Continue</button>';
-  var inp = $('#owner-pin'), go = $('#pin-go'); inp.focus();
-  function send(){ var v = inp.value.trim(); if (!/^\d{4,6}$/.test(v)) { $('#pin-err').textContent = 'Enter 4 to 6 digits.'; return; } go.disabled = true;
-    api('POST', '/api/auth/admin-pin', {challenge: challenge, pin: v}).then(function(r){ location.href = r.redirect || '/admin'; }, function(err){ go.disabled = false; $('#pin-err').textContent = err.message; if (/again\.$/.test(err.message) && /sign in again/i.test(err.message)) setTimeout(function(){ location.reload(); }, 1500); }); }
-  go.addEventListener('click', send); inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); send(); } });
+  // v6: the owner does NOT sign in here any more (laptop: /admin, phone: the Avermontis Admin app). Anything typed that is
+  // not an e-mail address is checked by the server like any other wrong login, so "admin" gets the same generic message.
+  wireForm(f, {email: function(v){ v = String(v).trim(); return !v ? 'Enter your email address.' : (v.indexOf('@') >= 0 ? R.email(v) : ''); }, password: function(v){ return v ? '' : 'Enter your password.'; }}, function(){ return api('POST', '/api/auth/login', {email: f.email.value.trim(), password: f.password.value}); }, function(){
+    location.href = nextUrl(); });
 }
 function renderSignup(){
   var f = $('#signup-form'); if (!f) return;

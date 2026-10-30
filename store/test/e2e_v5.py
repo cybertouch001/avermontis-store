@@ -1,4 +1,4 @@
-# Headless end-to-end test for AVERMONTIS v5 (website + app runtime emulation) against tools/e2e-server.mjs.
+# Headless end-to-end test for AVERMONTIS v5 (updated for v6: owner sign-in only on /admin and the Admin app) (website + app runtime emulation) against tools/e2e-server.mjs.
 # Run: node tools/e2e-server.mjs &   then   python3 test/e2e_v5.py <screenshot_dir>
 import sys, os, json, re, mimetypes, time
 from playwright.sync_api import sync_playwright, expect
@@ -6,7 +6,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else '/tmp/av5-shots'
 os.makedirs(OUT, exist_ok=True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 WWW = os.path.join(HERE, '..', '..', 'app', 'www')
-SRV = 'http://localhost:8788'
+SRV = os.environ.get('AVM_SRV', 'http://localhost:8788')
 SITE = 'https://avermontis.sites.tab.bot'
 PW = 'OwnerPass123'
 results = []
@@ -57,14 +57,15 @@ with sync_playwright() as pw:
     # 1) website: normal login page with username admin
     c = ctx('10.1.0.2'); pg = c.new_page(); pg.on('dialog', lambda d: d.accept())
     pg.goto(SITE + '/login'); pg.wait_for_selector('#login-form')
-    ok('login page label says Email or username', 'Email or username' in pg.inner_text('#login-form'))
+    ok('login page label says Email (v6: no username)', 'Email or username' not in pg.inner_text('#login-form'))
     pg.fill('#login-email', 'admin'); pg.fill('#login-password', 'wrong-pass-1'); pg.click('#login-form button[type=submit]')
     pg.wait_for_selector('#login-form .form-alert.error'); msg = pg.inner_text('#login-form .form-alert')
     ok('wrong owner password -> generic message', 'Username/email or password is incorrect' in msg, msg)
-    pg.fill('#login-email', 'admin'); pg.fill('#login-password', PW)
+    # v6: the owner signs in on /admin (laptop) or in the Avermontis Admin app, never on the customer login
+    pg.goto(SITE + '/admin'); pg.wait_for_selector('#admin-login'); pg.fill('#password', PW)
     pg.screenshot(path=os.path.join(OUT, 'av5-login-website.png'))
-    pg.click('#login-form button[type=submit]'); pg.wait_for_url(re.compile(r'/admin'), timeout=15000); pg.wait_for_selector('.adm-tabs')
-    ok('admin opens from the normal login', pg.is_visible('text=Design studio'))
+    pg.click('#admin-login button[type=submit]'); pg.wait_for_selector('.adm-tabs', timeout=15000)
+    ok('admin opens from /admin (v6)', pg.is_visible('text=Design studio'))
     # 2) design studio
     pg.click('.adm-tabs button[data-tab=design]'); pg.wait_for_selector('#v5-pv'); pg.wait_for_timeout(2500)
     pg.screenshot(path=os.path.join(OUT, 'av5-studio-themes.png'), full_page=False)
@@ -113,15 +114,13 @@ with sync_playwright() as pw:
     ap.screenshot(path=os.path.join(OUT, 'av5-app-home-fresh-green.png'))
     # customer sign-in still works in the app and does not open admin
     ap.click('#tabbar button[data-go=me]'); ap.wait_for_timeout(800)
-    ap.click('[data-act=owner]'); ap.wait_for_selector('#a-form'); ap.wait_for_timeout(400)
-    ok('app: sign-in sheet takes email or username', 'Email or username' in ap.inner_text('#a-form'))
+    ap.click('[data-auth=login]'); ap.wait_for_selector('#a-form'); ap.wait_for_timeout(400)
+    ok('app: sign-in sheet takes email (v6: no username)', 'Email or username' not in ap.inner_text('#a-form'))
     ap.fill('#a-email', 'admin'); ap.fill('#a-pw', PW); ap.screenshot(path=os.path.join(OUT, 'av5-login-app.png'))
-    ap.click('#a-go'); ap.wait_for_url(re.compile(r'avermontis\.sites\.tab\.bot/admin'), timeout=15000); ap.wait_for_selector('.adm-tabs', timeout=15000)
-    ok('app: admin opens inside the app via one-time handoff', ap.is_visible('#back-to-app'), ap.url)
-    ok('app: no owner token stored on the phone', ap.evaluate("1") == 1)
-    ap.screenshot(path=os.path.join(OUT, 'av5-app-admin.png'))
-    ap.click('.adm-tabs button[data-tab=design]'); ap.wait_for_selector('#v5-pv'); ap.wait_for_timeout(2000)
-    ap.screenshot(path=os.path.join(OUT, 'av5-app-admin-studio.png'), full_page=False)
+    ap.click('#a-go'); ap.wait_for_selector('#a-alert .alert', timeout=15000)
+    ok('app (v6): admin is refused with the generic message, stays in the app', 'incorrect' in ap.inner_text('#a-alert') and ap.url.startswith('https://localhost'), ap.url)
+    ok('app: no owner token stored on the phone', ap.evaluate("Object.keys(localStorage).filter(k => /admin|owner/i.test(k)).length") == 0)
+    ap.screenshot(path=os.path.join(OUT, 'av5-app-admin-refused.png'))
 
     # 5) Dark Luxe via preset + publish, then Undo, then restore, reset
     pg.click('[data-v5=presets]'); pg.click('[data-preset=dark_luxe]'); pg.wait_for_timeout(800); stt = act(pg, '#v5-publish', '/design/publish');
@@ -152,11 +151,11 @@ with sync_playwright() as pw:
     pg.screenshot(path=os.path.join(OUT, 'av5-security.png'), full_page=True)
 
     # 6) lockout + customer cannot reach admin
-    L = ctx('10.1.0.66'); lp = L.new_page(); lp.goto(SITE + '/login')
+    L = ctx('10.1.0.66'); lp = L.new_page(); lp.goto(SITE + '/admin'); lp.wait_for_selector('#admin-login')
     for i in range(5):
-        lp.fill('#login-email', 'Admin'); lp.fill('#login-password', 'nope-%d' % i); lp.click('#login-form button[type=submit]'); lp.wait_for_timeout(500)
-    lp.fill('#login-email', 'admin'); lp.fill('#login-password', PW); lp.click('#login-form button[type=submit]'); lp.wait_for_timeout(800)
-    t = lp.inner_text('#login-form .form-alert'); ok('lockout after 5 wrong tries (even with the right password)', 'locked for 15 minutes' in t, t)
+        lp.fill('#password', 'nope-%d' % i); lp.click('#admin-login button[type=submit]'); lp.wait_for_timeout(600)
+    lp.fill('#password', PW); lp.click('#admin-login button[type=submit]'); lp.wait_for_timeout(900)
+    t = lp.inner_text('#admin-login'); ok('lockout after 5 wrong tries (even with the right password)', 'locked for 15 minutes' in t, t[-160:])
     C = ctx('10.1.0.8'); cp = C.new_page(); cp.goto(SITE + '/login'); cp.fill('#login-email', 'priya@example.com'); cp.fill('#login-password', 'Customer123'); cp.click('#login-form button[type=submit]')
     cp.wait_for_url(re.compile(r'/account'), timeout=15000); ok('customer login still works', '/account' in cp.url)
     cp.goto(SITE + '/admin'); cp.wait_for_selector('#admin-login'); ok('customer cannot open admin', cp.is_visible('#admin-login'))

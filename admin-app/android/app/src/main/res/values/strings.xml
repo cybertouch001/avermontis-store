@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Avermontis Admin</string>
+    <string name="title_activity_main">Avermontis Admin</string>
+    <string name="package_name">bot.tab.sites.avermontis.admin</string>
+    <string name="custom_url_scheme">bot.tab.sites.avermontis.admin</string>
+</resources>
